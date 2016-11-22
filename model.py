@@ -4,11 +4,21 @@ from tensorflow.python.training import moving_averages
 import numpy as np
 import glob
 import argparse
+import logging
 
-# TODO SummaryWriter and other important utilities.
+from os.path import join
 
-IMAGES = "/etc/gan_images/high_res/*.png"
-LOGS_DIR = "/var/log/superres"
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+
+# TODO Download all images
+# TODO Split into training and validation sets
+# TODO Add a pass through the validation set after each epoch
+# TODO Add a summary writer for the validation set as well
+# TODO Checkpoint save training weights
+# TODO Start making hyperparameters command line options
+
+IMAGES = "images/*.png"
+LOGS_DIR = "logs/"
 
 HR_HEIGHT = 384
 HR_WIDTH = 384
@@ -25,26 +35,32 @@ MOVING_AVERAGE_DECAY = 0.9997
 BN_DECAY = MOVING_AVERAGE_DECAY
 UPDATE_OPS_COLLECTION = 'update_ops'
 BETA_1 = 0.9
+RANDOM_SEED = 1337 
 
 class Loader(object):
     def __init__(self, high_res_info):
+        global NUM_IMAGES, NUM_BATCHES
+
         f2, self.h2, self.w2 = high_res_info
         self.q2 = tf.train.string_input_producer(f2)
+        NUM_IMAGES = len(f2)
+        NUM_BATCHES = len(f2) / BATCH_SIZE
+        logging.info("Running on %d images" % (NUM_IMAGES,))
 
     def _get_pipeline(self, q, h, w):
         reader = tf.WholeFileReader()
         key, value = reader.read(q)
         raw_img = tf.image.decode_png(value, channels=NUM_CHANNELS)
         my_img = tf.image.per_image_whitening(raw_img)
-        my_img.set_shape((h, w, NUM_CHANNELS))
-        min_after_dequeue = 1000
+        my_img = tf.random_crop(my_img, [HR_HEIGHT, HR_WIDTH, NUM_CHANNELS], seed=RANDOM_SEED)
+        min_after_dequeue = 1
         capacity = min_after_dequeue + 3 * BATCH_SIZE
         batch = tf.train.shuffle_batch([my_img], batch_size=BATCH_SIZE, capacity=capacity,
-                min_after_dequeue=min_after_dequeue)
-        small_batch = tf.images.resize_bicubic(batch, [LR_HEIGHT, LR_WIDTH])
+                min_after_dequeue=min_after_dequeue, seed=RANDOM_SEED)
+        small_batch = tf.image.resize_bicubic(batch, [LR_HEIGHT, LR_WIDTH])
         return small_batch, batch
 
-    def batch():
+    def batch(self):
         return self._get_pipeline(self.q2, self.h2, self.w2)
 
 def relu_block(x, alpha=0., max_value=None):
@@ -132,16 +148,16 @@ def conv_block(inp, relu=False, leaky_relu=False, bn=False,
 
 def dense_block(inp, leaky_relu=False, sigmoid=False,
                 output_size=1024):
-    h = tf.reshape(inp, [-1, 1])
-    inp_size = h.get_shape()[0]
+    inp_size = inp.get_shape()
+    h = tf.reshape(inp, [int(inp_size[0]), -1])
+    h_size = h.get_shape()[1]
 
-    w = tf.get_variable("w", [output_size, inp_size],
+    w = tf.get_variable("w", [h_size, output_size],
         initializer=tf.random_normal_initializer(stddev=0.02))
     b = tf.get_variable("b", [output_size],
         initializer=tf.constant_initializer(0.0))
 
-    h = tf.matmul(w, h) + b
-    h = tf.reshape(inp, [-1])
+    h = tf.matmul(h, w) + b
 
     if leaky_relu:
         h = relu_block(h, alpha=0.1)
@@ -173,12 +189,14 @@ class GAN(object):
         self.g_ad_loss = tf.reduce_mean(tf.neg(tf.log(self.DG)))
 
         self.g_loss = self.mse_loss + self.g_ad_loss
+        tf.scalar_summary('g_loss', self.g_loss)
 
         # Real Loss and Adversarial Loss for D
         self.d_loss_real = tf.reduce_mean(tf.neg(tf.log(self.D)))
         self.d_loss_fake = tf.reduce_mean(tf.log(self.DG))
 
         self.d_loss = self.d_loss_real + self.d_loss_fake
+        tf.scalar_summary('d_loss', self.d_loss)
 
         t_vars = tf.trainable_variables()
 
@@ -274,8 +292,10 @@ class GAN(object):
 
         return h
 
+
 class SuperRes(object):
     def __init__(self, sess, loader):
+        logging.info("Building Model.")
         self.sess = sess
         self.loader = loader
         self.batch = loader.batch()
@@ -283,26 +303,63 @@ class SuperRes(object):
         self.GAN = GAN()
         self.GAN.build_model()
 
-        d_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
+        self.g_mse_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
+            .minimize(self.GAN.mse_loss, var_list=self.GAN.g_vars))
+        self.d_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
             .minimize(self.GAN.d_loss, var_list=self.GAN.d_vars))
-        g_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
+        self.g_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
             .minimize(self.GAN.g_loss, var_list=self.GAN.g_vars))
 
     def train_model(self):
-        tf.initialize_all_variables().run()
-        merged_summary_op = tf.merge_all_summaries()
+        merged = tf.merge_all_summaries()
+        pre_train_writer = tf.train.SummaryWriter(join(LOGS_DIR, 'pretrain'), self.sess.graph)
+        train_writer = tf.train.SummaryWriter(join(LOGS_DIR, 'train'), self.sess.graph)
+        logging.info("Initializing Variables.")
+        with self.sess as sess:
+            tf.initialize_all_variables().run()
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord)
 
-        summary_writer = tf.train.SummaryWriter(LOGS_DIR, graph_def=self.sess.graph_def)
+            # Pretrain
+            logging.info("Begin Pre-Training")
+            ind = 0
+            for epoch in range(NUM_EPOCHS):
+                logging.info("Pre-Training Epoch: %d" % (epoch,))
+                for batch in range(NUM_BATCHES):
+                    lr, hr = sess.run(self.batch)
+                    summary, _ = self.sess.run([merged, self.g_mse_optim], feed_dict={
+                        self.GAN.g_images: lr,
+                        self.GAN.d_images: hr,
+                        self.GAN.is_training: [True]
+                    })
+                    pre_train_writer.add_summary(summary, ind)
 
-        # TODO Don't forget to pass in is_training bool!
-        # Also add: merged_summary_op
-        # summary_writer.add_summary(summary_str, iteration*total_batch + i)
-        # Train
-        for epoch in range(NUM_EPOCHS):
-            batch_xs, batch_ys = sess.run(self.batch)
-            self.sess.run(self.d_optim, feed_dict={y: batch_ys})
-            self.sess.run(self.g_optim, feed_dict={x: batch_xs})
-            self.sess.run(self.g_optim, feed_dict={x: batch_xs})
+                    if ind % 10000 == 0:
+                        logging.info("Pre-Training Iter: %d" % (ind,))
+
+                    ind += 1
+
+            logging.info("Begin Training")
+            # Train
+            ind = 0
+            for epoch in range(NUM_EPOCHS):
+                logging.info("Training Epoch: %d" % (epoch,))
+                for batch in range(NUM_BATCHES):
+                    lr, hr = sess.run(self.batch)
+                    summary, _, __ = sess.run([merged, self.d_optim, self.g_optim], feed_dict={
+                        self.GAN.g_images: lr,
+                        self.GAN.d_images: hr,
+                        self.GAN.is_training: [True]
+                    })
+                    train_writer.add_summary(summary, ind)
+
+                    if ind % 10000 == 0:
+                        logging.info("Pre-Training Iter: %d" % (ind,))
+
+                    ind += 1
+
+            coord.request_stop()
+            coord.join(threads)
 
     def test_model(self):
         pass
