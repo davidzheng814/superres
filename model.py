@@ -5,6 +5,7 @@ import numpy as np
 import glob
 import argparse
 import logging
+import os
 
 from os.path import join
 
@@ -14,17 +15,17 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 # TODO Split into training and validation sets
 # TODO Add a pass through the validation set after each epoch
 # TODO Add a summary writer for the validation set as well
-# TODO Checkpoint save training weights
 # TODO Start making hyperparameters command line options
 
 IMAGES = "images/*.png"
 LOGS_DIR = "logs/"
+CHECKPOINT = "checkpoint/weights.ckpt"
 
 HR_HEIGHT = 384
 HR_WIDTH = 384
 r = 4
-LR_HEIGHT = HR_HEIGHT / r
-LR_WIDTH = HR_WIDTH / r
+LR_HEIGHT = HR_HEIGHT // r
+LR_WIDTH = HR_WIDTH // r
 NUM_CHANNELS = 3
 BATCH_SIZE = 50
 NUM_EPOCHS = 10
@@ -44,7 +45,7 @@ class Loader(object):
         f2, self.h2, self.w2 = high_res_info
         self.q2 = tf.train.string_input_producer(f2)
         NUM_IMAGES = len(f2)
-        NUM_BATCHES = len(f2) / BATCH_SIZE
+        NUM_BATCHES = len(f2) // BATCH_SIZE
         logging.info("Running on %d images" % (NUM_IMAGES,))
 
     def _get_pipeline(self, q, h, w):
@@ -314,9 +315,14 @@ class SuperRes(object):
         merged = tf.merge_all_summaries()
         pre_train_writer = tf.train.SummaryWriter(join(LOGS_DIR, 'pretrain'), self.sess.graph)
         train_writer = tf.train.SummaryWriter(join(LOGS_DIR, 'train'), self.sess.graph)
-        logging.info("Initializing Variables.")
+        saver = tf.train.Saver()
         with self.sess as sess:
-            tf.initialize_all_variables().run()
+            if os.path.isfile(CHECKPOINT):
+                logging.info("Restoring saved parameters")
+                saver.restore(sess, CHECKPOINT)
+            else:
+                logging.info("Initializing parameters")
+                sess.run(tf.initialize_all_variables())
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(coord=coord)
 
@@ -334,7 +340,8 @@ class SuperRes(object):
                     })
                     pre_train_writer.add_summary(summary, ind)
 
-                    if ind % 10000 == 0:
+                    if ind % 1000 == 0:
+                        saver.save(sess, CHECKPOINT)
                         logging.info("Pre-Training Iter: %d" % (ind,))
 
                     ind += 1
@@ -353,7 +360,8 @@ class SuperRes(object):
                     })
                     train_writer.add_summary(summary, ind)
 
-                    if ind % 10000 == 0:
+                    if ind % 1000 == 0:
+                        saver.save(sess, CHECKPOINT)
                         logging.info("Pre-Training Iter: %d" % (ind,))
 
                     ind += 1
