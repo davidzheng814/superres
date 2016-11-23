@@ -3,6 +3,8 @@ import glob
 import argparse
 import logging
 import os
+import sys
+import config as cfg
 
 from blocks import relu_block, res_block, deconv_block, conv_block, dense_block
 
@@ -13,60 +15,36 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 # TODO Check that things work
 # TODO Check that things match with paper
 
-IMAGES = "images/*.png"
-LOGS_DIR = "logs/"
-CHECKPOINT = "checkpoint/weights.ckpt"
-
-HR_HEIGHT = 384
-HR_WIDTH = 384
-r = 4
-LR_HEIGHT = HR_HEIGHT // r
-LR_WIDTH = HR_WIDTH // r
-NUM_CHANNELS = 3
-BATCH_SIZE = 1
-NUM_EPOCHS = 10
-TRAIN_RATIO = .3
-VAL_RATIO = .3
-
-LEARNING_RATE = 1e-4
-BN_EPSILON = 0.001
-MOVING_AVERAGE_DECAY = 0.9997
-BN_DECAY = MOVING_AVERAGE_DECAY
-UPDATE_OPS_COLLECTION = 'update_ops'
-BETA_1 = 0.9
-RANDOM_SEED = 1337 
-
 class Loader(object):
     def __init__(self, images):
-        global NUM_IMAGES, NUM_TRAIN_BATCHES, NUM_VAL_BATCHES, NUM_TEST_BATCHES
-
-        NUM_IMAGES = len(images)
-        NUM_TRAIN_IMAGES = int(NUM_IMAGES * TRAIN_RATIO)
-        NUM_VAL_IMAGES = int(NUM_IMAGES * VAL_RATIO)
-        train_images = images[:NUM_TRAIN_IMAGES]
-        val_images = images[NUM_TRAIN_IMAGES:NUM_TRAIN_IMAGES + NUM_VAL_IMAGES]
-        test_images = images[NUM_TRAIN_IMAGES + NUM_VAL_IMAGES:]
+        cfg.NUM_IMAGES = len(images)
+        cfg.NUM_TRAIN_IMAGES = int(cfg.NUM_IMAGES * cfg.TRAIN_RATIO)
+        cfg.NUM_VAL_IMAGES = int(cfg.NUM_IMAGES * cfg.VAL_RATIO)
+        train_images = images[:cfg.NUM_TRAIN_IMAGES]
+        val_images = images[cfg.NUM_TRAIN_IMAGES:cfg.NUM_TRAIN_IMAGES + cfg.NUM_VAL_IMAGES]
+        test_images = images[cfg.NUM_TRAIN_IMAGES + cfg.NUM_VAL_IMAGES:]
 
         self.q_train = tf.train.string_input_producer(train_images)
         self.q_val = tf.train.string_input_producer(val_images)
         self.q_test = tf.train.string_input_producer(test_images)
-        NUM_TRAIN_BATCHES = len(train_images) // BATCH_SIZE
-        NUM_VAL_BATCHES = len(val_images) // BATCH_SIZE
-        NUM_TEST_BATCHES = len(test_images) // BATCH_SIZE
+        cfg.NUM_TRAIN_BATCHES = len(train_images) // cfg.BATCH_SIZE
+        cfg.NUM_VAL_BATCHES = len(val_images) // cfg.BATCH_SIZE
+        cfg.NUM_TEST_BATCHES = len(test_images) // cfg.BATCH_SIZE
 
-        logging.info("Running on %d images" % (NUM_IMAGES,))
+        logging.info("Running on %d images" % (cfg.NUM_IMAGES,))
 
     def _get_pipeline(self, q):
         reader = tf.WholeFileReader()
         key, value = reader.read(q)
-        raw_img = tf.image.decode_png(value, channels=NUM_CHANNELS)
+        raw_img = tf.image.decode_jpeg(value, channels=cfg.NUM_CHANNELS)
         my_img = tf.image.per_image_whitening(raw_img)
-        my_img = tf.random_crop(my_img, [HR_HEIGHT, HR_WIDTH, NUM_CHANNELS], seed=RANDOM_SEED)
+        my_img = tf.random_crop(my_img, [cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS],
+                seed=cfg.RANDOM_SEED)
         min_after_dequeue = 1
-        capacity = min_after_dequeue + 3 * BATCH_SIZE
-        batch = tf.train.shuffle_batch([my_img], batch_size=BATCH_SIZE, capacity=capacity,
-                min_after_dequeue=min_after_dequeue, seed=RANDOM_SEED)
-        small_batch = tf.image.resize_bicubic(batch, [LR_HEIGHT, LR_WIDTH])
+        capacity = min_after_dequeue + 3 * cfg.BATCH_SIZE
+        batch = tf.train.shuffle_batch([my_img], batch_size=cfg.BATCH_SIZE, capacity=capacity,
+                min_after_dequeue=min_after_dequeue, seed=cfg.RANDOM_SEED)
+        small_batch = tf.image.resize_bicubic(batch, [cfg.LR_HEIGHT, cfg.LR_WIDTH])
         return (small_batch, batch)
 
     def batch(self):
@@ -77,9 +55,9 @@ class Loader(object):
 class GAN(object):
     def __init__(self):
         self.g_images = tf.placeholder(tf.float32, 
-            [BATCH_SIZE, LR_HEIGHT, LR_WIDTH, NUM_CHANNELS])
+            [cfg.BATCH_SIZE, cfg.LR_HEIGHT, cfg.LR_WIDTH, cfg.NUM_CHANNELS])
         self.d_images = tf.placeholder(tf.float32,
-            [BATCH_SIZE, HR_HEIGHT, HR_WIDTH, NUM_CHANNELS])
+            [cfg.BATCH_SIZE, cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS])
         self.is_training = tf.placeholder(tf.bool, [1])
 
     def build_model(self):
@@ -210,87 +188,155 @@ class SuperRes(object):
         self.GAN = GAN()
         self.GAN.build_model()
 
-        self.g_mse_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
+        self.g_mse_optim = (tf.train.AdamOptimizer(cfg.LEARNING_RATE, beta1=cfg.BETA_1)
             .minimize(self.GAN.mse_loss, var_list=self.GAN.g_vars))
-        self.d_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
+        self.d_optim = (tf.train.AdamOptimizer(cfg.LEARNING_RATE, beta1=cfg.BETA_1)
             .minimize(self.GAN.d_loss, var_list=self.GAN.d_vars))
-        self.g_optim = (tf.train.AdamOptimizer(LEARNING_RATE, beta1=BETA_1)
+        self.g_optim = (tf.train.AdamOptimizer(cfg.LEARNING_RATE, beta1=cfg.BETA_1)
             .minimize(self.GAN.g_loss, var_list=self.GAN.g_vars))
+
+    def _pretrain(self):
+        lr, hr = self.sess.run(self.train_batch)
+        summary, _, loss = self.sess.run(
+            [self.merged, self.g_mse_optim, self.GAN.mse_loss],
+            feed_dict={
+                self.GAN.g_images: lr,
+                self.GAN.d_images: hr,
+                self.GAN.is_training: [True]
+        })
+        return summary, loss
+
+    def _train(self):
+        """
+        Returns (summary, mse_loss, g_ad_loss, g_loss, d_loss_real, d_loss_fake, d_loss)
+        """
+        lr, hr = sess.run(self.val_batch)
+        res = sess.run(
+            [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
+             self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
+            feed_dict={
+                self.GAN.g_images: lr,
+                self.GAN.d_images: hr,
+                self.GAN.is_training: [True]
+        })
+
+        return res[0] + res[3:]
+
+    def _val(self):
+        """
+        Returns (summary, mse_loss, g_ad_loss, g_loss, d_loss_real, d_loss_fake, d_loss)
+        """
+        lr, hr = sess.run(self.train_batch)
+        res = sess.run(
+            [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
+             self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
+            feed_dict={
+                self.GAN.g_images: lr,
+                self.GAN.d_images: hr,
+                self.GAN.is_training: [False]
+        })
+
+        return res[0] + res[3:]
+
+    def _test(self):
+        """
+        Returns (summary, mse_loss, g_ad_loss, g_loss, d_loss_real, d_loss_fake, d_loss)
+        """
+        lr, hr = sess.run(self.test_batch)
+        res = sess.run(
+            [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
+             self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
+            feed_dict={
+                self.GAN.g_images: lr,
+                self.GAN.d_images: hr,
+                self.GAN.is_training: [False]
+        })
+
+        return res[0] + res[3:]
+
+    def _print_losses(self, losses, count):
+        avg_losses = [x / count for x in losses]
+        logging.info("G Loss: %f, MSE Loss: %f, Ad Loss: %f"
+                % (avg_losses[0], avg_losses[1], avg_losses[2]))
+        logging.info("D Loss: %f, Real Loss: %f, Fake Loss: %f"
+                % (avg_losses[3], avg_losses[4], avg_losses[5]))
 
     def train_model(self):
         self.merged = tf.merge_all_summaries()
-        pre_train_writer = tf.train.SummaryWriter(os.path.join(LOGS_DIR, 'pretrain'), self.sess.graph)
-        train_writer = tf.train.SummaryWriter(os.path.join(LOGS_DIR, 'train'), self.sess.graph)
-        val_writer = tf.train.SummaryWriter(os.path.join(LOGS_DIR, 'val'), self.sess.graph)
+        self.pre_train_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'pretrain'),
+                self.sess.graph)
+        self.train_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'train'),
+                self.sess.graph)
+        self.val_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'val'),
+                self.sess.graph)
         saver = tf.train.Saver()
 
         with self.sess as sess:
-            if os.path.isfile(CHECKPOINT):
+            if cfg.USE_CHECKPOINT and os.path.isfile(cfg.CHECKPOINT):
                 logging.info("Restoring saved parameters")
-                saver.restore(sess, CHECKPOINT)
+                saver.restore(sess, cfg.CHECKPOINT)
             else:
                 logging.info("Initializing parameters")
                 sess.run(tf.initialize_all_variables())
+
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(coord=coord)
 
             # Pretrain
             logging.info("Begin Pre-Training")
             ind = 0
-            for epoch in range(NUM_EPOCHS):
+            for epoch in range(cfg.NUM_PRETRAIN_EPOCHS):
                 logging.info("Pre-Training Epoch: %d" % (epoch,))
-                for batch in range(NUM_TRAIN_BATCHES):
-                    lr, hr = sess.run(self.train_batch)
-                    summary, _ = self.sess.run([self.merged, self.g_mse_optim], feed_dict={
-                        self.GAN.g_images: lr,
-                        self.GAN.d_images: hr,
-                        self.GAN.is_training: [True]
-                    })
-                    pre_train_writer.add_summary(summary, ind)
+                loss_sum = 0
+                for batch in range(cfg.NUM_TRAIN_BATCHES):
+                    summary, loss = self._pretrain()
+                    self.pre_train_writer.add_summary(summary, ind)
+                    loss_sum += loss
 
                     if ind % 1000 == 0:
-                        saver.save(sess, CHECKPOINT)
+                        saver.save(sess, cfg.CHECKPOINT)
                         logging.info("Pre-Training Iter: %d" % (ind,))
+                        logging.info("MSE Loss: %f" % (loss_sum / (batch + 1),))
 
                     ind += 1
+                logging.info("Epoch MSE Loss: %f" % (loss_sum / cfg.NUM_TRAIN_BATCHES,))
 
             logging.info("Begin Training")
             # Train
             ind = 0
-            for epoch in range(NUM_EPOCHS):
+            for epoch in range(cfg.NUM_TRAIN_EPOCHS):
                 logging.info("Training Epoch: %d" % (epoch,))
-                for batch in range(NUM_TRAIN_BATCHES):
-                    lr, hr = sess.run(self.train_batch)
-                    summary, _, _ = sess.run([self.merged, self.d_optim, self.g_optim], feed_dict={
-                        self.GAN.g_images: lr,
-                        self.GAN.d_images: hr,
-                        self.GAN.is_training: [True]
-                    })
-                    train_writer.add_summary(summary, ind)
+                losses = [0 for _ in range(6)]
+                for batch in range(cfg.NUM_TRAIN_BATCHES):
+                    res = self._train()
+                    train_writer.add_summary(res[0], ind)
+                    losses = [x + y for x, y in zip(losses, res[1:])]
 
                     if ind % 1000 == 0:
-                        saver.save(sess, CHECKPOINT)
+                        saver.save(sess, cfg.CHECKPOINT)
                         logging.info("Training Iter: %d" % (ind,))
+                        self._print_losses(losses, batch + 1)
 
                     ind += 1
 
-                for batch in range(NUM_VAL_BATCHES):
-                    lr, hr = sess.run(self.val_batch)
-                    summary, d_loss, g_loss = sess.run([self.merged, self.d_loss, self.g_loss], 
-                        feed_dict={
-                            self.GAN.g_images: lr,
-                            self.GAN.d_images: hr,
-                            self.GAN.is_training: [False]
-                    })
-                    val_writer.add_summary(summary, ind)
-
+                logging.info("Epoch Training Losses")
+                self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
+                
+                losses = [0 for _ in range(6)]
+                for batch in range(cfg.NUM_VAL_BATCHES):
+                    res = self._val()
+                    val_writer.add_summary(res[0], ind)
+                    losses = [x + y for x, y in zip(losses, res[1:])]
                     ind += 1
+
+                logging.info("Epoch Validation Losses")
+                self._print_losses(losses, cfg.NUM_VAL_BATCHES)
 
             coord.request_stop()
             coord.join(threads)
 
     def test_model(self):
-        val_writer = tf.train.SummaryWriter(join(LOGS_DIR, 'test'), self.sess.graph)
+        val_writer = tf.train.SummaryWriter(join(cfg.LOGS_DIR, 'test'), self.sess.graph)
 
         with self.sess as sess:
             logging.info("Begin Testing")
@@ -298,23 +344,22 @@ class SuperRes(object):
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(coord=coord)
             ind = 0
-            for batch in range(NUM_TEST_BATCHES):
+            for batch in range(cfg.NUM_TEST_BATCHES):
                 lr, hr = sess.run(self.test_batch)
-                summary, d_loss, g_loss = sess.run([self.merged, self.d_loss, self.g_loss], 
-                    feed_dict={
-                        self.GAN.g_images: lr,
-                        self.GAN.d_images: hr,
-                        self.GAN.is_training: [False]
-                })
-                test_writer.add_summary(summary, ind)
+                res = self._test()
+                test_writer.add_summary(res[0], ind)
+                losses = [x + y for x, y in zip(losses, res[1:])]
                 ind += 1
+
+            logging.info("Test Losses")
+            self._print_losses(losses, cfg.NUM_TEST_BATCHES)
 
             coord.request_stop()
             coord.join(threads)
 
 def main():
     sess = tf.Session()
-    file_list = glob.glob(IMAGES)
+    file_list = glob.glob(cfg.IMAGES)
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()

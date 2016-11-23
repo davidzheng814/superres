@@ -2,6 +2,8 @@ import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.training import moving_averages
 
+import config as cfg
+
 def relu_block(x, alpha=0., max_value=None):
     negative_part = tf.nn.relu(-x)
     x = tf.nn.relu(x)
@@ -53,7 +55,7 @@ def conv_block(inp, relu=False, leaky_relu=False, bn=False,
     strides = [1, stride, stride, 1]
 
     weights = tf.get_variable('weights', kernel_shape,
-        initializer=tf.random_normal_initializer())
+        initializer=tf.random_normal_initializer(stddev=0.02))
     h = tf.nn.conv2d(inp, weights, strides, padding='SAME')
 
     if leaky_relu:
@@ -105,5 +107,4 @@ def dense_block(inp, leaky_relu=False, sigmoid=False,
         h = tf.nn.sigmoid(h)
 
     return h
-
 
