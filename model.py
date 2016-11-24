@@ -62,18 +62,18 @@ class GAN(object):
 
     def build_model(self):
         with tf.variable_scope("G"):
-            self.G = self.generator()
+            self.G = self.generator(self.g_images)
 
-        with tf.variable_scope("D"):
+        with tf.variable_scope("D") as scope:
             self.D = self.discriminator(self.d_images)
-            tf.get_variable_scope().reuse_variables()
+            scope.reuse_variables()
             self.DG = self.discriminator(self.G)
 
         # MSE Loss and Adversarial Loss for G
         self.mse_loss = tf.reduce_mean(tf.squared_difference(self.d_images, self.G))
         self.g_ad_loss = tf.reduce_mean(tf.neg(tf.log(self.DG)))
 
-        self.g_loss = self.mse_loss + self.g_ad_loss
+        self.g_loss = self.mse_loss + 0.001 * self.g_ad_loss
         tf.scalar_summary('g_loss', self.g_loss)
 
         # Real Loss and Adversarial Loss for D
@@ -102,23 +102,9 @@ class GAN(object):
         with tf.variable_scope("conv1"):
             h = conv_block(self.g_images, relu=True)
 
-        with tf.variable_scope("res1"):
-            h = res_block(h, self.is_training)
-
-        with tf.variable_scope("res2"):
-            h = res_block(h, self.is_training)
-
-        with tf.variable_scope("res3"):
-            h = res_block(h, self.is_training)
-
-        with tf.variable_scope("res4"):
-            h = res_block(h, self.is_training)
-
-        with tf.variable_scope("res5"):
-            h = res_block(h, self.is_training)
-
-        with tf.variable_scope("res6"):
-            h = res_block(h, self.is_training)
+        for i in range(1, 17):
+            with tf.variable_scope("res" + str(i)):
+                h = res_block(h, self.is_training)
 
         with tf.variable_scope("deconv1"):
             h = deconv_block(h)
@@ -256,7 +242,7 @@ class SuperRes(object):
 
     def _print_losses(self, losses, count):
         avg_losses = [x / count for x in losses]
-        logging.info("G Loss: %f, MSE Loss: %f, Ad Loss: %f"
+        logging.info("G Loss: %f, MSE Loss: %d, Ad Loss: %d"
                 % (avg_losses[0], avg_losses[1], avg_losses[2]))
         logging.info("D Loss: %f, Real Loss: %f, Fake Loss: %f"
                 % (avg_losses[3], avg_losses[4], avg_losses[5]))
