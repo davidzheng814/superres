@@ -77,7 +77,7 @@ class GAN(object):
 
         # Real Loss and Adversarial Loss for D
         self.d_loss_real = tf.reduce_mean(tf.neg(tf.log(self.D)))
-        self.d_loss_fake = tf.reduce_mean(tf.log(self.DG))
+        self.d_loss_fake = tf.reduce_mean(tf.neg(tf.log(1 - self.DG)))
 
         self.d_loss = self.d_loss_real + self.d_loss_fake
         tf.scalar_summary('d_loss', self.d_loss)
@@ -197,8 +197,9 @@ class SuperRes(object):
         """
         lr, hr = self.sess.run(self.val_batch)
         res = self.sess.run(
-            [self.merged, self.d_optim, self.g_optim, self.GAN.mse_loss, self.GAN.g_ad_loss,
-             self.GAN.g_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake, self.GAN.d_loss],
+            [self.merged, self.d_optim, self.g_optim,
+             self.GAN.g_loss, self.GAN.mse_loss, self.GAN.g_ad_loss,
+             self.GAN.d_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
@@ -213,8 +214,9 @@ class SuperRes(object):
         """
         lr, hr = self.sess.run(self.train_batch)
         res = self.sess.run(
-            [self.merged, self.GAN.mse_loss, self.GAN.g_ad_loss,
-             self.GAN.g_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake, self.GAN.d_loss],
+            [self.merged,
+             self.GAN.g_loss, self.GAN.mse_loss, self.GAN.g_ad_loss,
+             self.GAN.d_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
@@ -229,8 +231,9 @@ class SuperRes(object):
         """
         lr, hr = self.sess.run(self.test_batch)
         res = self.sess.run(
-            [self.merged, self.d_optim, self.g_optim, self.GAN.mse_loss, self.GAN.g_ad_loss,
-             self.GAN.g_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake, self.GAN.d_loss],
+            [self.merged, self.d_optim, self.g_optim,
+             self.GAN.g_loss, self.GAN.mse_loss, self.GAN.g_ad_loss,
+             self.GAN.d_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
