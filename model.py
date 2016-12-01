@@ -62,7 +62,7 @@ class GAN(object):
 
     def build_model(self):
         with tf.variable_scope("G"):
-            self.G = self.generator(self.g_images)
+            self.G = self.generator()
 
         with tf.variable_scope("D") as scope:
             self.D = self.discriminator(self.d_images)
@@ -214,7 +214,7 @@ class SuperRes(object):
         """
         lr, hr = sess.run(self.train_batch)
         res = sess.run(
-            [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
+            [self.merged, self.mse_loss, self.g_ad_loss,
              self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
             feed_dict={
                 self.GAN.g_images: lr,
@@ -222,7 +222,7 @@ class SuperRes(object):
                 self.GAN.is_training: [False]
         })
 
-        return res[0] + res[3:]
+        return res
 
     def _test(self):
         """
@@ -295,7 +295,7 @@ class SuperRes(object):
                 losses = [0 for _ in range(6)]
                 for batch in range(cfg.NUM_TRAIN_BATCHES):
                     res = self._train()
-                    train_writer.add_summary(res[0], ind)
+                    self.train_writer.add_summary(res[0], ind)
                     losses = [x + y for x, y in zip(losses, res[1:])]
 
                     if ind % 1000 == 0:
@@ -311,7 +311,7 @@ class SuperRes(object):
                 losses = [0 for _ in range(6)]
                 for batch in range(cfg.NUM_VAL_BATCHES):
                     res = self._val()
-                    val_writer.add_summary(res[0], ind)
+                    self.val_writer.add_summary(res[0], ind)
                     losses = [x + y for x, y in zip(losses, res[1:])]
                     ind += 1
 
