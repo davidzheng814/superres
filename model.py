@@ -197,15 +197,15 @@ class SuperRes(object):
         """
         lr, hr = self.sess.run(self.val_batch)
         res = self.sess.run(
-            [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
-             self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
+            [self.merged, self.d_optim, self.g_optim, self.GAN.mse_loss, self.GAN.g_ad_loss,
+             self.GAN.g_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake, self.GAN.d_loss],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
                 self.GAN.is_training: [True]
         })
 
-        return res[0] + res[3:]
+        return res[:1] + res[3:]
 
     def _val(self):
         """
@@ -237,7 +237,7 @@ class SuperRes(object):
                 self.GAN.is_training: [False]
         })
 
-        return res[0] + res[3:]
+        return res[:1] + res[3:]
 
     def _print_losses(self, losses, count):
         avg_losses = [x / count for x in losses]
