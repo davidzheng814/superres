@@ -57,7 +57,7 @@ class GAN(object):
             [cfg.BATCH_SIZE, cfg.LR_HEIGHT, cfg.LR_WIDTH, cfg.NUM_CHANNELS])
         self.d_images = tf.placeholder(tf.float32,
             [cfg.BATCH_SIZE, cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS])
-        self.is_training = tf.placeholder(tf.bool, [1])
+        self.is_training = tf.placeholder(tf.bool, shape=[])
 
     def build_model(self):
         with tf.variable_scope("G"):
@@ -180,14 +180,18 @@ class SuperRes(object):
         self.g_optim = (tf.train.AdamOptimizer(cfg.LEARNING_RATE, beta1=cfg.BETA_1)
             .minimize(self.GAN.g_loss, var_list=self.GAN.g_vars))
 
+        batchnorm_updates = tf.get_collection(cfg.UPDATE_OPS_COLLECTION)
+        self.pretrain = tf.group(*batchnorm_updates, self.g_mse_optim)
+        self.train = tf.group(*batchnorm_updates, self.d_optim, self.g_optim)
+
     def _pretrain(self):
         lr, hr = self.sess.run(self.train_batch)
         summary, _, loss = self.sess.run(
-            [self.merged, self.g_mse_optim, self.GAN.mse_loss],
+            [self.merged, self.pretrain, self.GAN.mse_loss],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
-                self.GAN.is_training: [True]
+                self.GAN.is_training: True
         })
         return summary, loss
 
@@ -197,16 +201,16 @@ class SuperRes(object):
         """
         lr, hr = self.sess.run(self.val_batch)
         res = self.sess.run(
-            [self.merged, self.d_optim, self.g_optim,
+            [self.train, self.merged,
              self.GAN.g_loss, self.GAN.mse_loss, self.GAN.g_ad_loss,
              self.GAN.d_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
-                self.GAN.is_training: [True]
+                self.GAN.is_training: True
         })
 
-        return res[:1] + res[3:]
+        return res[1:]
 
     def _val(self):
         """
@@ -220,7 +224,7 @@ class SuperRes(object):
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
-                self.GAN.is_training: [False]
+                self.GAN.is_training: False
         })
 
         return res
@@ -237,7 +241,7 @@ class SuperRes(object):
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
-                self.GAN.is_training: [False]
+                self.GAN.is_training: False
         })
 
         return res[:1] + res[3:]

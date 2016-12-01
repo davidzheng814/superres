@@ -62,25 +62,25 @@ def conv_block(inp, relu=False, leaky_relu=False, bn=False,
         h = relu_block(h, alpha=0.1)
 
     if bn:
-        pass # TODO Figure out how to do BN
-        # beta = tf.get_variable('beta', params_shape, 
-        #     initializer=tf.zeros_initializer)
-        # gamma = tf.get_variable('gamma', params_shape, 
-        #     initializer=tf.ones_initializer)
-        # moving_mean = tf.get_variable('moving_mean', params_shape, 
-        #     initializer=tf.zeros_initializer, trainable=False)
-        # moving_variance = tf.get_variable('moving_variance', params_shape, 
-        #     initializer=tf.ones_initializer, trainable=False)
-        # mean, variance = tf.nn.moments(h, [0, 1, 2])
-        # update_moving_mean = moving_averages.assign_moving_average(moving_mean,
-        #     mean, BN_DECAY)
-        # update_moving_variance = moving_averages.assign_moving_average(moving_variance,
-        #     variance, BN_DECAY)
-        # tf.add_to_collection(UPDATE_OPS_COLLECTION, update_moving_mean)
-        # tf.add_to_collection(UPDATE_OPS_COLLECTION, update_moving_variance)
-        # mean, variance = control_flow_ops.cond(is_training_cond, lambda: (mean, variance),
-        #     lambda: (moving_mean, moving_variance))
-        # h = tf.nn.batch_normalization(h, mean, variance, beta, gamma, BN_EPSILON)
+        params_shape = h.get_shape()[-1:]
+        beta = tf.get_variable('beta', params_shape, 
+            initializer=tf.zeros_initializer)
+        gamma = tf.get_variable('gamma', params_shape, 
+            initializer=tf.ones_initializer)
+        moving_mean = tf.get_variable('moving_mean', params_shape, 
+            initializer=tf.zeros_initializer, trainable=False)
+        moving_variance = tf.get_variable('moving_variance', params_shape, 
+            initializer=tf.ones_initializer, trainable=False)
+        mean, variance = tf.nn.moments(h, [0, 1, 2])
+        update_moving_mean = moving_averages.assign_moving_average(moving_mean,
+            mean, cfg.BN_DECAY)
+        update_moving_variance = moving_averages.assign_moving_average(moving_variance,
+            variance, cfg.BN_DECAY)
+        tf.add_to_collection(cfg.UPDATE_OPS_COLLECTION, update_moving_mean)
+        tf.add_to_collection(cfg.UPDATE_OPS_COLLECTION, update_moving_variance)
+        mean, variance = tf.cond(is_training_cond, lambda: (mean, variance),
+            lambda: (moving_mean, moving_variance))
+        h = tf.nn.batch_normalization(h, mean, variance, beta, gamma, cfg.BN_EPSILON)
 
     if relu:
         h = tf.nn.relu(h)
