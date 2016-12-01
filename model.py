@@ -241,7 +241,7 @@ class SuperRes(object):
 
     def _print_losses(self, losses, count):
         avg_losses = [x / count for x in losses]
-        logging.info("G Loss: %f, MSE Loss: %d, Ad Loss: %d"
+        logging.info("G Loss: %f, MSE Loss: %f, Ad Loss: %f"
                 % (avg_losses[0], avg_losses[1], avg_losses[2]))
         logging.info("D Loss: %f, Real Loss: %f, Fake Loss: %f"
                 % (avg_losses[3], avg_losses[4], avg_losses[5]))
