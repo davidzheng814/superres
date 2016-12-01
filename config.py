@@ -1,4 +1,4 @@
-IMAGES = "images/*.JPEG"
+IMAGES = "/home/images/*.JPEG"
 LOGS_DIR = "logs/"
 CHECKPOINT = "checkpoint/weights.ckpt"
 USE_CHECKPOINT = False

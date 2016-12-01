@@ -23,7 +23,6 @@ class Loader(object):
         train_images = images[:cfg.NUM_TRAIN_IMAGES]
         val_images = images[cfg.NUM_TRAIN_IMAGES:cfg.NUM_TRAIN_IMAGES + cfg.NUM_VAL_IMAGES]
         test_images = images[cfg.NUM_TRAIN_IMAGES + cfg.NUM_VAL_IMAGES:]
-
         self.q_train = tf.train.string_input_producer(train_images)
         self.q_val = tf.train.string_input_producer(val_images)
         self.q_test = tf.train.string_input_producer(test_images)
@@ -40,7 +39,7 @@ class Loader(object):
         my_img = tf.image.per_image_whitening(raw_img)
         my_img = tf.random_crop(my_img, [cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS],
                 seed=cfg.RANDOM_SEED)
-        min_after_dequeue = 1
+        min_after_dequeue = 1000
         capacity = min_after_dequeue + 3 * cfg.BATCH_SIZE
         batch = tf.train.shuffle_batch([my_img], batch_size=cfg.BATCH_SIZE, capacity=capacity,
                 min_after_dequeue=min_after_dequeue, seed=cfg.RANDOM_SEED)
@@ -196,8 +195,8 @@ class SuperRes(object):
         """
         Returns (summary, mse_loss, g_ad_loss, g_loss, d_loss_real, d_loss_fake, d_loss)
         """
-        lr, hr = sess.run(self.val_batch)
-        res = sess.run(
+        lr, hr = self.sess.run(self.val_batch)
+        res = self.sess.run(
             [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
              self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
             feed_dict={
@@ -212,10 +211,10 @@ class SuperRes(object):
         """
         Returns (summary, mse_loss, g_ad_loss, g_loss, d_loss_real, d_loss_fake, d_loss)
         """
-        lr, hr = sess.run(self.train_batch)
-        res = sess.run(
-            [self.merged, self.mse_loss, self.g_ad_loss,
-             self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
+        lr, hr = self.sess.run(self.train_batch)
+        res = self.sess.run(
+            [self.merged, self.GAN.mse_loss, self.GAN.g_ad_loss,
+             self.GAN.g_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake, self.GAN.d_loss],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
@@ -228,10 +227,10 @@ class SuperRes(object):
         """
         Returns (summary, mse_loss, g_ad_loss, g_loss, d_loss_real, d_loss_fake, d_loss)
         """
-        lr, hr = sess.run(self.test_batch)
-        res = sess.run(
-            [self.merged, self.d_optim, self.g_optim, self.mse_loss, self.g_ad_loss,
-             self.g_loss, self.d_loss_real, self.d_loss_fake, self.d_loss],
+        lr, hr = self.sess.run(self.test_batch)
+        res = self.sess.run(
+            [self.merged, self.d_optim, self.g_optim, self.GAN.mse_loss, self.GAN.g_ad_loss,
+             self.GAN.g_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake, self.GAN.d_loss],
             feed_dict={
                 self.GAN.g_images: lr,
                 self.GAN.d_images: hr,
