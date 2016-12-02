@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import config as cfg
+from scipy.misc import imresize
 from PIL import Image
 
 from blocks import relu_block, res_block, deconv_block, conv_block, dense_block
@@ -197,11 +198,15 @@ class SuperRes(object):
         self.pretrain = tf.group(self.g_mse_optim, *batchnorm_updates)
         self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
 
-    def predict(self, input_name, output_name):
+    def predict(self, input_name, output_name, ckpt_file=None):
+        if ckpt_file is not None:
+            saver = tf.train.Saver()
+            logging.info("Restoring saved parameters")
+            saver.restore(self.sess, ckpt_file)
         with Image.open(input_name) as image:
             image = np.asarray(image, dtype=np.uint8)
+            image = imresize(image, 25)
             image = np.reshape(image, (1,) + image.shape)
-            print(image.shape)
             test_GAN = GAN()
             test_GAN.build_model(image)
             generated_image = self.sess.run(
@@ -210,12 +215,9 @@ class SuperRes(object):
                     test_GAN.image_tensor: image,
                     test_GAN.is_training: False
             })
-            generated_image = generated_image[0][0]
-            generated_image = np.uint8(generated_image)
-            generated_image = Image.fromarray(generated_image)
-            generated_image = generated_image.convert('RGB')
+            generated_image = np.uint8(generated_image[0][0])
+            generated_image = Image.fromarray(generated_image).convert('RGB')
             generated_image.save(output_name)
-            return generated_image
 
     def _pretrain(self):
         lr, hr = self.sess.run(self.train_batch)
@@ -317,7 +319,6 @@ class SuperRes(object):
                     summary, loss = self._pretrain()
                     self.pre_train_writer.add_summary(summary, ind)
                     loss_sum += loss
-
                     if ind % 1000 == 0:
                         saver.save(sess, cfg.CHECKPOINT)
                         logging.info("Pre-Training Iter: %d" % (ind,))
@@ -356,7 +357,6 @@ class SuperRes(object):
 
                 logging.info("Epoch Validation Losses")
                 self._print_losses(losses, cfg.NUM_VAL_BATCHES)
-
             coord.request_stop()
             coord.join(threads)
 
@@ -388,7 +388,7 @@ def main():
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()
-    print (model.predict("images/possibly_corrupt/n00007846_80134.JPEG", "output_image.JPEG"))
+    model.predict("/home/images/possibly_corrupt/n00007846_80134.JPEG", "output_image.JPEG")
     sess.close()
 
 if __name__ == '__main__':
