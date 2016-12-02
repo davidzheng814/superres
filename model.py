@@ -40,8 +40,7 @@ class Loader(object):
         reader = tf.WholeFileReader()
         key, value = reader.read(q)
         raw_img = tf.image.decode_jpeg(value, channels=cfg.NUM_CHANNELS)
-        my_img = tf.image.per_image_whitening(raw_img)
-        my_img = tf.random_crop(my_img, [cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS],
+        my_img = tf.random_crop(raw_img, [cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS],
                 seed=cfg.RANDOM_SEED)
         min_after_dequeue = 1000
         capacity = min_after_dequeue + 3 * cfg.BATCH_SIZE
