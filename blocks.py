@@ -43,6 +43,10 @@ def deconv_block(inp, relu=True, output_channels=64):
         initializer=tf.random_normal_initializer(stddev=0.02))
     h = tf.nn.conv2d_transpose(inp, weights, output_shape, strides)
 
+    bias = tf.get_variable('bias', [output_channels],
+            initializer=tf.constant_initializer(0.0))
+    h = tf.nn.bias_add(h, bias)
+
     if relu:
         h = tf.nn.relu(h)
 
