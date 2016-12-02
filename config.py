@@ -1,6 +1,6 @@
-IMAGES = "images/possibly_corrupt/*.JPEG"
+IMAGES = "/home/images/imagenet/*.JPEG"
 LOGS_DIR = "logs/"
-CHECKPOINT = "checkpoint/weights.ckpt"
+CHECKPOINT = "checkpoint/weights"
 USE_CHECKPOINT = False
 
 HR_HEIGHT = 96
@@ -9,9 +9,9 @@ r = 4
 LR_HEIGHT = HR_HEIGHT // r
 LR_WIDTH = HR_WIDTH // r
 NUM_CHANNELS = 3
-BATCH_SIZE = 16
-NUM_PRETRAIN_EPOCHS = 10
-NUM_TRAIN_EPOCHS = 5
+BATCH_SIZE = 24
+NUM_PRETRAIN_EPOCHS = 120
+NUM_TRAIN_EPOCHS = 20
 TRAIN_RATIO = .7
 VAL_RATIO = .2
 
