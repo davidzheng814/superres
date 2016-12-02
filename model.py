@@ -78,15 +78,22 @@ class GAN(object):
                 self.DG = self.discriminator(self.G)
 
             # MSE Loss and Adversarial Loss for G
-            self.mse_loss = tf.reduce_mean(tf.squared_difference(self.d_images, self.G))
-            self.g_ad_loss = tf.reduce_mean(tf.neg(tf.log(self.DG)))
+            self.mse_loss = tf.reduce_mean(
+                    tf.squared_difference(self.d_images, self.G))
+            self.g_ad_loss = (tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                    self.DG, tf.ones_like(self.DG))))
 
             self.g_loss = self.mse_loss + 0.001 * self.g_ad_loss
             tf.scalar_summary('g_loss', self.g_loss)
 
             # Real Loss and Adversarial Loss for D
-            self.d_loss_real = tf.reduce_mean(tf.neg(tf.log(self.D)))
-            self.d_loss_fake = tf.reduce_mean(tf.neg(tf.log(1 - self.DG)))
+            self.d_loss_real = (tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                    self.D, tf.ones_like(self.D))))
+            self.d_loss_fake = (tf.reduce_mean(
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                    self.DG, tf.zeros_like(self.DG))))
 
             self.d_loss = self.d_loss_real + self.d_loss_fake
             tf.scalar_summary('d_loss', self.d_loss)
@@ -170,7 +177,7 @@ class GAN(object):
             h = dense_block(h, leaky_relu=True, output_size=1024)
 
         with tf.variable_scope("dense2"):
-            h = dense_block(h, sigmoid=True, output_size=1)
+            h = dense_block(h, output_size=1)
 
         return h
 
@@ -203,7 +210,7 @@ class SuperRes(object):
             saver.restore(self.sess, ckpt_file)
         with Image.open(input_name) as image:
             image = np.asarray(image, dtype=np.uint8)
-            image = imresize(image, 25)
+            image = imresize(image, 100 // cfg.r)
             image = np.reshape(image, (1,) + image.shape)
             test_GAN = GAN()
             test_GAN.build_model(image)
@@ -268,7 +275,7 @@ class SuperRes(object):
         """
         lr, hr = self.sess.run(self.test_batch)
         res = self.sess.run(
-            [self.merged, self.d_optim, self.g_optim,
+            [self.merged,
              self.GAN.g_loss, self.GAN.mse_loss, self.GAN.g_ad_loss,
              self.GAN.d_loss, self.GAN.d_loss_real, self.GAN.d_loss_fake],
             feed_dict={
@@ -277,7 +284,7 @@ class SuperRes(object):
                 self.GAN.is_training: False
         })
 
-        return res[:1] + res[3:]
+        return res
 
     def _print_losses(self, losses, count):
         avg_losses = [x / count for x in losses]
