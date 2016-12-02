@@ -1,10 +1,12 @@
 import tensorflow as tf
+import numpy as np
 import glob
 import argparse
 import logging
 import os
 import sys
 import config as cfg
+from PIL import Image
 
 from blocks import relu_block, res_block, deconv_block, conv_block, dense_block
 
@@ -14,6 +16,8 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 # TODO Start making hyperparameters command line options
 # TODO Check that things work
 # TODO Check that things match with paper
+# TODO Randomize train/test/validation sets (seed)
+# TODO Change batch size
 
 class Loader(object):
     def __init__(self, images):
@@ -58,37 +62,44 @@ class GAN(object):
         self.d_images = tf.placeholder(tf.float32,
             [cfg.BATCH_SIZE, cfg.HR_HEIGHT, cfg.HR_WIDTH, cfg.NUM_CHANNELS])
         self.is_training = tf.placeholder(tf.bool, shape=[])
+        self.image_tensor = None
 
-    def build_model(self):
-        with tf.variable_scope("G"):
-            self.G = self.generator()
+    def build_model(self, input_image=None):
+        if input_image is not None:
+            with tf.variable_scope("G", reuse=True) as scope:
+                self.image_tensor = tf.placeholder(tf.float32, input_image.shape)
+                scope.reuse_variables()
+                self.G = self.generator()
+        else:
+            with tf.variable_scope("G"):
+                self.G = self.generator()
 
-        with tf.variable_scope("D") as scope:
-            self.D = self.discriminator(self.d_images)
-            scope.reuse_variables()
-            self.DG = self.discriminator(self.G)
+            with tf.variable_scope("D") as scope:
+                self.D = self.discriminator(self.d_images)
+                scope.reuse_variables()
+                self.DG = self.discriminator(self.G)
 
-        # MSE Loss and Adversarial Loss for G
-        self.mse_loss = tf.reduce_mean(tf.squared_difference(self.d_images, self.G))
-        self.g_ad_loss = tf.reduce_mean(tf.neg(tf.log(self.DG)))
+            # MSE Loss and Adversarial Loss for G
+            self.mse_loss = tf.reduce_mean(tf.squared_difference(self.d_images, self.G))
+            self.g_ad_loss = tf.reduce_mean(tf.neg(tf.log(self.DG)))
 
-        self.g_loss = self.mse_loss + 0.001 * self.g_ad_loss
-        tf.scalar_summary('g_loss', self.g_loss)
+            self.g_loss = self.mse_loss + 0.001 * self.g_ad_loss
+            tf.scalar_summary('g_loss', self.g_loss)
 
-        # Real Loss and Adversarial Loss for D
-        self.d_loss_real = tf.reduce_mean(tf.neg(tf.log(self.D)))
-        self.d_loss_fake = tf.reduce_mean(tf.neg(tf.log(1 - self.DG)))
+            # Real Loss and Adversarial Loss for D
+            self.d_loss_real = tf.reduce_mean(tf.neg(tf.log(self.D)))
+            self.d_loss_fake = tf.reduce_mean(tf.neg(tf.log(1 - self.DG)))
 
-        self.d_loss = self.d_loss_real + self.d_loss_fake
-        tf.scalar_summary('d_loss', self.d_loss)
+            self.d_loss = self.d_loss_real + self.d_loss_fake
+            tf.scalar_summary('d_loss', self.d_loss)
 
-        t_vars = tf.trainable_variables()
+            t_vars = tf.trainable_variables()
 
-        self.d_vars = [var for var in t_vars if 'D/' in var.name]
-        self.g_vars = [var for var in t_vars if 'G/' in var.name]
+            self.d_vars = [var for var in t_vars if 'D/' in var.name]
+            self.g_vars = [var for var in t_vars if 'G/' in var.name]
 
-        # TODO Missing VGG loss and regularization loss. 
-        # Also missing weighting on losses.
+            # TODO Missing VGG loss and regularization loss.
+            # Also missing weighting on losses.
 
     def generator(self):
         """Returns model generator, which is a DeConvNet.
@@ -99,7 +110,10 @@ class GAN(object):
             ...
         """
         with tf.variable_scope("conv1"):
-            h = conv_block(self.g_images, relu=True)
+            if self.image_tensor != None:
+                h = conv_block(self.image_tensor, relu=True)
+            else:
+                h = conv_block(self.g_images, relu=True)
 
         for i in range(1, 17):
             with tf.variable_scope("res" + str(i)):
@@ -181,8 +195,28 @@ class SuperRes(object):
             .minimize(self.GAN.g_loss, var_list=self.GAN.g_vars))
 
         batchnorm_updates = tf.get_collection(cfg.UPDATE_OPS_COLLECTION)
-        self.pretrain = tf.group(*batchnorm_updates, self.g_mse_optim)
-        self.train = tf.group(*batchnorm_updates, self.d_optim, self.g_optim)
+        self.pretrain = tf.group(self.g_mse_optim, *batchnorm_updates)
+        self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
+
+    def predict(self, input_name, output_name):
+        with Image.open(input_name) as image:
+            image = np.asarray(image, dtype=np.uint8)
+            image = np.reshape(image, (1,) + image.shape)
+            print(image.shape)
+            test_GAN = GAN()
+            test_GAN.build_model(image)
+            generated_image = self.sess.run(
+                [test_GAN.G],
+                feed_dict={
+                    test_GAN.image_tensor: image,
+                    test_GAN.is_training: False
+            })
+            generated_image = generated_image[0][0]
+            generated_image = np.uint8(generated_image)
+            generated_image = Image.fromarray(generated_image)
+            generated_image = generated_image.convert('RGB')
+            generated_image.save(output_name)
+            return generated_image
 
     def _pretrain(self):
         lr, hr = self.sess.run(self.train_batch)
@@ -355,7 +389,7 @@ def main():
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()
-
+    print (model.predict("images/possibly_corrupt/n00007846_80134.JPEG", "output_image.JPEG"))
     sess.close()
 
 if __name__ == '__main__':
