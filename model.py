@@ -203,11 +203,9 @@ class SuperRes(object):
         self.pretrain = tf.group(self.g_mse_optim, *batchnorm_updates)
         self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
 
-    def predict(self, input_name, output_name, ckpt_file=None):
-        if ckpt_file is not None:
-            saver = tf.train.Saver()
-            logging.info("Restoring saved parameters")
-            saver.restore(self.sess, ckpt_file)
+    def predict(self, input_name, output_name, init_vars):
+        if init_vars:
+            self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         with Image.open(input_name) as image:
             image = np.asarray(image, dtype=np.uint8)
             image = imresize(image, 100 // cfg.r)
@@ -223,6 +221,16 @@ class SuperRes(object):
             generated_image = np.uint8(generated_image[0][0])
             generated_image = Image.fromarray(generated_image).convert('RGB')
             generated_image.save(output_name)
+
+    def _load_latest_checkpoint_or_initialize(self, saver, attempt_load=True):
+        ckpt_files = list(filter(lambda x: "meta" not in x, glob.glob(cfg.CHECKPOINT + "*")))
+        if attempt_load and len(ckpt_files) > 0:
+            ckpt_files.sort()
+            logging.info("Loading params from " + ckpt_files[-1])
+            saver.restore(self.sess, ckpt_files[-1])
+        else:
+            logging.info("Initializing parameters")
+            self.sess.run(tf.initialize_all_variables())
 
     def _pretrain(self):
         lr, hr = self.sess.run(self.train_batch)
@@ -303,15 +311,9 @@ class SuperRes(object):
         self.val_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'val'),
                 self.sess.graph)
         saver = tf.train.Saver()
+        self._load_latest_checkpoint_or_initialize(saver, attempt_load=cfg.USE_CHECKPOINT)
 
         with self.sess as sess:
-            if cfg.USE_CHECKPOINT and os.path.isfile(cfg.CHECKPOINT):
-                logging.info("Restoring saved parameters")
-                saver.restore(sess, cfg.CHECKPOINT)
-            else:
-                logging.info("Initializing parameters")
-                sess.run(tf.initialize_all_variables())
-
             coord = tf.train.Coordinator()
             threads = tf.train.start_queue_runners(coord=coord)
 
@@ -393,7 +395,7 @@ def main():
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()
-    model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG")
+    model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG", init_vars=False)
     sess.close()
 
 if __name__ == '__main__':
