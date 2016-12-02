@@ -35,8 +35,6 @@ class Loader(object):
         cfg.NUM_VAL_BATCHES = len(val_images) // cfg.BATCH_SIZE
         cfg.NUM_TEST_BATCHES = len(test_images) // cfg.BATCH_SIZE
 
-        logging.info("Running on %d images" % (cfg.NUM_IMAGES,))
-
     def _get_pipeline(self, q):
         reader = tf.WholeFileReader()
         key, value = reader.read(q)
@@ -289,6 +287,7 @@ class SuperRes(object):
                 % (avg_losses[3], avg_losses[4], avg_losses[5]))
 
     def train_model(self):
+        logging.info("Running on %d images" % (cfg.NUM_IMAGES,))
         self.merged = tf.merge_all_summaries()
         self.pre_train_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'pretrain'),
                 self.sess.graph)
@@ -312,42 +311,36 @@ class SuperRes(object):
             # Pretrain
             logging.info("Begin Pre-Training")
             ind = 0
-            for epoch in range(cfg.NUM_PRETRAIN_EPOCHS):
+            for epoch in range(1, cfg.NUM_PRETRAIN_EPOCHS + 1):
                 logging.info("Pre-Training Epoch: %d" % (epoch,))
                 loss_sum = 0
                 for batch in range(cfg.NUM_TRAIN_BATCHES):
                     summary, loss = self._pretrain()
                     self.pre_train_writer.add_summary(summary, ind)
                     loss_sum += loss
-                    if ind % 1000 == 0:
-                        saver.save(sess, cfg.CHECKPOINT)
-                        logging.info("Pre-Training Iter: %d" % (ind,))
-                        logging.info("MSE Loss: %f" % (loss_sum / (batch + 1),))
-
                     ind += 1
                 logging.info("Epoch MSE Loss: %f" % (loss_sum / cfg.NUM_TRAIN_BATCHES,))
 
+                if epoch%10==0:
+                    logging.info("Saving Checkpoint")
+                    saver.save(sess, cfg.CHECKPOINT + str(epoch))
+
             logging.info("Begin Training")
-            # Train
+            # Adversarial training
             ind = 0
-            for epoch in range(cfg.NUM_TRAIN_EPOCHS):
+            for epoch in range(1, cfg.NUM_TRAIN_EPOCHS + 1):
                 logging.info("Training Epoch: %d" % (epoch,))
                 losses = [0 for _ in range(6)]
                 for batch in range(cfg.NUM_TRAIN_BATCHES):
                     res = self._train()
                     self.train_writer.add_summary(res[0], ind)
                     losses = [x + y for x, y in zip(losses, res[1:])]
-
-                    if ind % 1000 == 0:
-                        saver.save(sess, cfg.CHECKPOINT)
-                        logging.info("Training Iter: %d" % (ind,))
-                        self._print_losses(losses, batch + 1)
-
                     ind += 1
 
                 logging.info("Epoch Training Losses")
                 self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
-                
+
+                # Validation
                 losses = [0 for _ in range(6)]
                 for batch in range(cfg.NUM_VAL_BATCHES):
                     res = self._val()
@@ -357,6 +350,11 @@ class SuperRes(object):
 
                 logging.info("Epoch Validation Losses")
                 self._print_losses(losses, cfg.NUM_VAL_BATCHES)
+
+                if epoch%10==0:
+                    logging.info("Saving Checkpoint (Adversarial)")
+                    saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
+
             coord.request_stop()
             coord.join(threads)
 
@@ -388,7 +386,7 @@ def main():
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()
-    model.predict("/home/images/possibly_corrupt/n00007846_80134.JPEG", "output_image.JPEG")
+    model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG")
     sess.close()
 
 if __name__ == '__main__':
