@@ -118,6 +118,8 @@ class GAN(object):
             if self.image_tensor != None:
                 h = conv_block(self.image_tensor, relu=True)
             else:
+                noise = tf.random_normal(self.g_images.get_shape(), stddev=.03 * 255)
+                h = self.g_images + noise
                 h = conv_block(self.g_images, relu=True)
 
         for i in range(1, 17):
