@@ -7,7 +7,7 @@ import os
 import sys
 import config as cfg
 import re
-from scipy.misc import imresize
+from scipy.misc import imresize, toimage
 from PIL import Image
 
 from blocks import relu_block, res_block, deconv_block, conv_block, dense_block
@@ -77,8 +77,9 @@ class GAN(object):
                 self.DG = self.discriminator(self.G)
 
             # MSE Loss and Adversarial Loss for G
-            self.mse_loss = tf.reduce_mean(
-                    tf.squared_difference(self.d_images, self.G))
+            # self.mse_loss = tf.reduce_mean(
+                    # tf.squared_difference(self.d_images, self.G))
+            self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
             self.g_ad_loss = (tf.reduce_mean(
                     tf.nn.sigmoid_cross_entropy_with_logits(
                     self.DG, tf.ones_like(self.DG))))
@@ -117,8 +118,8 @@ class GAN(object):
             if self.image_tensor != None:
                 h = conv_block(self.image_tensor, relu=True)
             else:
-                noise = tf.random_normal(self.g_images.get_shape(), stddev=.03 * 255)
-                h = self.g_images + noise
+                # noise = tf.random_normal(self.g_images.get_shape(), stddev=.03 * 255)
+                h = self.g_images
                 h = conv_block(self.g_images, relu=True)
 
         for i in range(1, 17):
@@ -208,20 +209,23 @@ class SuperRes(object):
         if init_vars == True:
             self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         with Image.open(input_name) as image:
-            image = np.asarray(image, dtype=np.uint8)
-            image = imresize(image, 100 // cfg.r)
-            image = np.reshape(image, (1,) + image.shape)
+            hr = np.asarray(image, dtype=np.uint8)
+            lr = imresize(hr, 100 // cfg.r, interp='bicubic')
+            bicubic = imresize(lr, cfg.r * 100, interp='bicubic')
+            image = np.reshape(lr, (1,) + lr.shape)
             test_GAN = GAN()
             test_GAN.build_model(image)
-            generated_image = self.sess.run(
+            image = self.sess.run(
                 [test_GAN.G],
                 feed_dict={
                     test_GAN.image_tensor: image,
                     test_GAN.is_training: False
             })
-            generated_image = np.uint8(generated_image[0][0])
-            generated_image = Image.fromarray(generated_image).convert('RGB')
-            generated_image.save(output_name)
+            image = np.maximum(np.minimum(image[0][0], 255.0), 0.0)
+            toimage(lr, cmin=0., cmax=255.).save(output_name + '_lr.JPEG')
+            toimage(bicubic, cmin=0., cmax=255.).save(output_name + '_bc.JPEG')
+            toimage(hr, cmin=0., cmax=255.).save(output_name + '_hr.JPEG')
+            toimage(image, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
 
     def _load_latest_checkpoint_or_initialize(self, saver, attempt_load=True):
         ckpt_files = list(filter(lambda x: "meta" not in x, glob.glob(cfg.CHECKPOINT + "*")))
@@ -336,7 +340,7 @@ class SuperRes(object):
                     ind += 1
                 logging.info("Epoch MSE Loss: %f" % (loss_sum / cfg.NUM_TRAIN_BATCHES,))
 
-                if epoch%10==0:
+                if epoch % 10 == 0:
                     logging.info("Saving Checkpoint")
                     saver.save(sess, cfg.CHECKPOINT + str(epoch))
             done_batch = 0
@@ -346,32 +350,33 @@ class SuperRes(object):
         logging.info("Begin Training")
         # Adversarial training
         ind = 0
-        for epoch in range(done_batch + 1, cfg.NUM_TRAIN_EPOCHS + 1):
-            logging.info("Training Epoch: %d" % (epoch,))
-            losses = [0 for _ in range(6)]
-            for batch in range(cfg.NUM_TRAIN_BATCHES):
-                res = self._train()
-                self.train_writer.add_summary(res[0], ind)
-                losses = [x + y for x, y in zip(losses, res[1:])]
-                ind += 1
+        if not cfg.PRETRAIN_ONLY:
+            for epoch in range(done_batch + 1, cfg.NUM_TRAIN_EPOCHS + 1):
+                logging.info("Training Epoch: %d" % (epoch,))
+                losses = [0 for _ in range(6)]
+                for batch in range(cfg.NUM_TRAIN_BATCHES):
+                    res = self._train()
+                    self.train_writer.add_summary(res[0], ind)
+                    losses = [x + y for x, y in zip(losses, res[1:])]
+                    ind += 1
 
-            logging.info("Epoch Training Losses")
-            self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
+                logging.info("Epoch Training Losses")
+                self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
 
-            # Validation
-            losses = [0 for _ in range(6)]
-            for batch in range(cfg.NUM_VAL_BATCHES):
-                res = self._val()
-                self.val_writer.add_summary(res[0], ind)
-                losses = [x + y for x, y in zip(losses, res[1:])]
-                ind += 1
+                # Validation
+                losses = [0 for _ in range(6)]
+                for batch in range(cfg.NUM_VAL_BATCHES):
+                    res = self._val()
+                    self.val_writer.add_summary(res[0], ind)
+                    losses = [x + y for x, y in zip(losses, res[1:])]
+                    ind += 1
 
-            logging.info("Epoch Validation Losses")
-            self._print_losses(losses, cfg.NUM_VAL_BATCHES)
+                logging.info("Epoch Validation Losses")
+                self._print_losses(losses, cfg.NUM_VAL_BATCHES)
 
-            if epoch%5==0:
-                logging.info("Saving Checkpoint (Adversarial)")
-                saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
+                if epoch % 5 == 0:
+                    logging.info("Saving Checkpoint (Adversarial)")
+                    saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
 
         coord.request_stop()
         coord.join(threads)
@@ -399,14 +404,55 @@ class SuperRes(object):
             coord.join(threads)
 
 def main():
-    sess = tf.Session()
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=cfg.MEM_FRAC)
+    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     file_list = glob.glob(cfg.IMAGES)
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
-    model.train_model()
-    model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG", init_vars=False)
+
+    TEST_IMGS = [
+        "/home/images/imagenet/n00007846_80134.JPEG",
+        "/home/images/imagenet/n00015388_65010.JPEG",
+    ]
+    OUT_FILE = "images/test_{i}"
+    if cfg.PREDICT_ONLY:
+        for i, img in enumerate(TEST_IMGS):
+            out_file = OUT_FILE.replace("{i}", str(i))
+            model.predict(img, out_file, init_vars=True)
+    else:
+        model.train_model()
+        for i, img in enumerate(TEST_IMGS):
+            out_file = OUT_FILE.replace("{i}", str(i))
+            model.predict(img, out_file, init_vars=False)
     sess.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--num-epochs', type=int)
+    parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--mem', type=float)
+    parser.add_argument('--use-ckpt', action="store_true")
+    parser.add_argument('--no-ckpt', action="store_true")
+    parser.add_argument('--pretrain-only', action="store_true")
+    parser.add_argument('--predict-only', action="store_true")
+    parser.add_argument('--max-files', type=int)
+
+    args = parser.parse_args()
+    if args.num_epochs:
+        cfg.NUM_EPOCHS = args.num_epochs
+    if args.batch_size:
+        cfg.NUM_EPOCHS = args.batch_size
+    if args.use_ckpt:
+        cfg.USE_CHECKPOINT = True
+    if args.no_ckpt:
+        cfg.USE_CHECKPOINT = False
+    if args.max_files:
+        cfg.MAX_FILES = args.max_files
+    if args.pretrain_only:
+        cfg.PRETRAIN_ONLY = True
+    if args.predict_only:
+        cfg.PREDICT_ONLY = True
+    if args.mem:
+        cfg.MEM_FRAC = args.mem
+
     main()
