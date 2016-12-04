@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import config as cfg
+import re
 from scipy.misc import imresize
 from PIL import Image
 
@@ -15,10 +16,8 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 
 # TODO Download all images
 # TODO Start making hyperparameters command line options
-# TODO Check that things work
 # TODO Check that things match with paper
 # TODO Randomize train/test/validation sets (seed)
-# TODO Change batch size
 
 class Loader(object):
     def __init__(self, images):
@@ -84,7 +83,7 @@ class GAN(object):
                     tf.nn.sigmoid_cross_entropy_with_logits(
                     self.DG, tf.ones_like(self.DG))))
 
-            self.g_loss = self.mse_loss + 0.001 * self.g_ad_loss
+            self.g_loss = self.mse_loss + cfg.AD_LOSS_WEIGHT * self.g_ad_loss
             tf.scalar_summary('g_loss', self.g_loss)
 
             # Real Loss and Adversarial Loss for D
@@ -206,8 +205,8 @@ class SuperRes(object):
         self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
 
     def predict(self, input_name, output_name, init_vars):
-        if init_vars:
-            self._load_latest_checkpoint_or_initialize(tf.train.Saver())
+        assert init_vars == True
+        self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         with Image.open(input_name) as image:
             image = np.asarray(image, dtype=np.uint8)
             image = imresize(image, 100 // cfg.r)
@@ -227,7 +226,7 @@ class SuperRes(object):
     def _load_latest_checkpoint_or_initialize(self, saver, attempt_load=True):
         ckpt_files = list(filter(lambda x: "meta" not in x, glob.glob(cfg.CHECKPOINT + "*")))
         if attempt_load and len(ckpt_files) > 0:
-            ckpt_files.sort()
+            ckpt_files.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split('(\d+)', s)])
             logging.info("Loading params from " + ckpt_files[-1])
             saver.restore(self.sess, ckpt_files[-1])
         else:
@@ -312,7 +311,7 @@ class SuperRes(object):
                 self.sess.graph)
         self.val_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'val'),
                 self.sess.graph)
-        saver = tf.train.Saver()
+        saver = tf.train.Saver(max_to_keep=None)
         self._load_latest_checkpoint_or_initialize(saver, attempt_load=cfg.USE_CHECKPOINT)
 
         with self.sess as sess:
@@ -362,7 +361,7 @@ class SuperRes(object):
                 logging.info("Epoch Validation Losses")
                 self._print_losses(losses, cfg.NUM_VAL_BATCHES)
 
-                if epoch%10==0:
+                if epoch%5==0:
                     logging.info("Saving Checkpoint (Adversarial)")
                     saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
 
@@ -397,7 +396,7 @@ def main():
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()
-    model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG", init_vars=False)
+    #model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG", init_vars=True)
     sess.close()
 
 if __name__ == '__main__':
