@@ -205,8 +205,8 @@ class SuperRes(object):
         self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
 
     def predict(self, input_name, output_name, init_vars):
-        assert init_vars == True
-        self._load_latest_checkpoint_or_initialize(tf.train.Saver())
+        if init_vars == True:
+            self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         with Image.open(input_name) as image:
             image = np.asarray(image, dtype=np.uint8)
             image = imresize(image, 100 // cfg.r)
@@ -229,9 +229,11 @@ class SuperRes(object):
             ckpt_files.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split('(\d+)', s)])
             logging.info("Loading params from " + ckpt_files[-1])
             saver.restore(self.sess, ckpt_files[-1])
+            return ckpt_files[-1]
         else:
             logging.info("Initializing parameters")
             self.sess.run(tf.initialize_all_variables())
+            return ""
 
     def _pretrain(self):
         lr, hr = self.sess.run(self.train_batch)
@@ -312,16 +314,19 @@ class SuperRes(object):
         self.val_writer = tf.train.SummaryWriter(os.path.join(cfg.LOGS_DIR, 'val'),
                 self.sess.graph)
         saver = tf.train.Saver(max_to_keep=None)
-        self._load_latest_checkpoint_or_initialize(saver, attempt_load=cfg.USE_CHECKPOINT)
+        ckpt = self._load_latest_checkpoint_or_initialize(saver, attempt_load=cfg.USE_CHECKPOINT)
+        match = re.search(r'\d+$', ckpt)
+        done_batch = int(match.group(0)) if match else 0
 
-        with self.sess as sess:
-            coord = tf.train.Coordinator()
-            threads = tf.train.start_queue_runners(coord=coord)
+        sess = self.sess
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 
+        if "adversarial" not in ckpt:
             # Pretrain
             logging.info("Begin Pre-Training")
             ind = 0
-            for epoch in range(1, cfg.NUM_PRETRAIN_EPOCHS + 1):
+            for epoch in range(done_batch + 1, cfg.NUM_PRETRAIN_EPOCHS + 1):
                 logging.info("Pre-Training Epoch: %d" % (epoch,))
                 loss_sum = 0
                 for batch in range(cfg.NUM_TRAIN_BATCHES):
@@ -334,39 +339,42 @@ class SuperRes(object):
                 if epoch%10==0:
                     logging.info("Saving Checkpoint")
                     saver.save(sess, cfg.CHECKPOINT + str(epoch))
+            done_batch = 0
+        else:
+            logging.info("Skipping Pre-Training")
 
-            logging.info("Begin Training")
-            # Adversarial training
-            ind = 0
-            for epoch in range(1, cfg.NUM_TRAIN_EPOCHS + 1):
-                logging.info("Training Epoch: %d" % (epoch,))
-                losses = [0 for _ in range(6)]
-                for batch in range(cfg.NUM_TRAIN_BATCHES):
-                    res = self._train()
-                    self.train_writer.add_summary(res[0], ind)
-                    losses = [x + y for x, y in zip(losses, res[1:])]
-                    ind += 1
+        logging.info("Begin Training")
+        # Adversarial training
+        ind = 0
+        for epoch in range(done_batch + 1, cfg.NUM_TRAIN_EPOCHS + 1):
+            logging.info("Training Epoch: %d" % (epoch,))
+            losses = [0 for _ in range(6)]
+            for batch in range(cfg.NUM_TRAIN_BATCHES):
+                res = self._train()
+                self.train_writer.add_summary(res[0], ind)
+                losses = [x + y for x, y in zip(losses, res[1:])]
+                ind += 1
 
-                logging.info("Epoch Training Losses")
-                self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
+            logging.info("Epoch Training Losses")
+            self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
 
-                # Validation
-                losses = [0 for _ in range(6)]
-                for batch in range(cfg.NUM_VAL_BATCHES):
-                    res = self._val()
-                    self.val_writer.add_summary(res[0], ind)
-                    losses = [x + y for x, y in zip(losses, res[1:])]
-                    ind += 1
+            # Validation
+            losses = [0 for _ in range(6)]
+            for batch in range(cfg.NUM_VAL_BATCHES):
+                res = self._val()
+                self.val_writer.add_summary(res[0], ind)
+                losses = [x + y for x, y in zip(losses, res[1:])]
+                ind += 1
 
-                logging.info("Epoch Validation Losses")
-                self._print_losses(losses, cfg.NUM_VAL_BATCHES)
+            logging.info("Epoch Validation Losses")
+            self._print_losses(losses, cfg.NUM_VAL_BATCHES)
 
-                if epoch%5==0:
-                    logging.info("Saving Checkpoint (Adversarial)")
-                    saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
+            if epoch%5==0:
+                logging.info("Saving Checkpoint (Adversarial)")
+                saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
 
-            coord.request_stop()
-            coord.join(threads)
+        coord.request_stop()
+        coord.join(threads)
 
     def test_model(self):
         val_writer = tf.train.SummaryWriter(join(cfg.LOGS_DIR, 'test'), self.sess.graph)
@@ -396,7 +404,7 @@ def main():
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
     model.train_model()
-    #model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG", init_vars=True)
+    model.predict("/home/images/imagenet/n00007846_80134.JPEG", "output_image.JPEG", init_vars=False)
     sess.close()
 
 if __name__ == '__main__':
