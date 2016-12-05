@@ -9,6 +9,7 @@ import config as cfg
 import re
 from scipy.misc import imresize, toimage
 from PIL import Image
+from scipy import signal, ndimage
 
 from blocks import relu_block, res_block, deconv_block, conv_block, dense_block
 
@@ -77,9 +78,9 @@ class GAN(object):
                 self.DG = self.discriminator(self.G)
 
             # MSE Loss and Adversarial Loss for G
-            # self.mse_loss = tf.reduce_mean(
-                    # tf.squared_difference(self.d_images, self.G))
-            self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
+            self.mse_loss = tf.reduce_mean(
+                tf.squared_difference(self.d_images, self.G))
+            # self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
             self.g_ad_loss = (tf.reduce_mean(
                     tf.nn.sigmoid_cross_entropy_with_logits(
                     self.DG, tf.ones_like(self.DG))))
@@ -122,7 +123,7 @@ class GAN(object):
                 h = self.g_images
                 h = conv_block(self.g_images, relu=True)
 
-        for i in range(1, 17):
+        for i in range(1, 16):
             with tf.variable_scope("res" + str(i)):
                 h = res_block(h, self.is_training)
 
@@ -183,6 +184,44 @@ class GAN(object):
 
         return h
 
+def matlab_style_gauss2D(shape=(3,3),sigma=0.5):
+    """
+    2D gaussian mask - should give the same result as MATLAB's
+    fspecial('gaussian',[shape],[sigma])
+    """
+    m,n = [(ss-1.)/2. for ss in shape]
+    y,x = np.ogrid[-m:m+1,-n:n+1]
+    h = np.exp( -(x*x + y*y) / (2.*sigma*sigma) )
+    h[ h < np.finfo(h.dtype).eps*h.max() ] = 0
+    sumh = h.sum()
+    if sumh != 0:
+        h /= sumh
+    return h
+
+def to_y(img):
+    return .229 * img[:,:,0] + .587 * img[:,:,1] + .114 * img[:,:,2]
+
+def ssim(img1, img2, cs_map=False):
+    img1 = to_y(img1.astype(np.uint8)[4:-4,4:-4])
+    img2 = to_y(img2.astype(np.uint8)[4:-4,4:-4])
+    size = (11, 11)
+    sigma = 1.5
+    window = matlab_style_gauss2D(size, sigma)
+    K1 = 0.01
+    K2 = 0.03
+    L = 255 #bitdepth of image
+    C1 = (K1*L)**2
+    C2 = (K2*L)**2
+    mu1 = signal.fftconvolve(window, img1, mode='valid')
+    mu2 = signal.fftconvolve(window, img2, mode='valid')
+    mu1_sq = mu1*mu1
+    mu2_sq = mu2*mu2
+    mu1_mu2 = mu1*mu2
+    sigma1_sq = signal.fftconvolve(window, img1*img1, mode='valid') - mu1_sq
+    sigma2_sq = signal.fftconvolve(window, img2*img2, mode='valid') - mu2_sq
+    sigma12 = signal.fftconvolve(window, img1*img2, mode='valid') - mu1_mu2
+    return (((2*mu1_mu2 + C1)*(2*sigma12 + C2))/((mu1_sq + mu2_sq + C1)*
+            (sigma1_sq + sigma2_sq + C2))).mean()
 
 class SuperRes(object):
     def __init__(self, sess, loader):
@@ -210,22 +249,28 @@ class SuperRes(object):
             self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         with Image.open(input_name) as image:
             hr = np.asarray(image, dtype=np.uint8)
+            w = hr.shape[0] - hr.shape[0] % 4
+            h = hr.shape[1] - hr.shape[1] % 4
+            hr = hr[:w,:h]
             lr = imresize(hr, 100 // cfg.r, interp='bicubic')
             bicubic = imresize(lr, cfg.r * 100, interp='bicubic')
             image = np.reshape(lr, (1,) + lr.shape)
             test_GAN = GAN()
             test_GAN.build_model(image)
-            image = self.sess.run(
+            sr = self.sess.run(
                 [test_GAN.G],
                 feed_dict={
                     test_GAN.image_tensor: image,
                     test_GAN.is_training: False
             })
-            image = np.maximum(np.minimum(image[0][0], 255.0), 0.0)
+            sr = np.maximum(np.minimum(sr[0][0], 255.0), 0.0)
+
+            logging.info("SSIM - Bicubic %f, SR %f", ssim(bicubic, hr), ssim(sr, hr))
+
             toimage(lr, cmin=0., cmax=255.).save(output_name + '_lr.JPEG')
             toimage(bicubic, cmin=0., cmax=255.).save(output_name + '_bc.JPEG')
             toimage(hr, cmin=0., cmax=255.).save(output_name + '_hr.JPEG')
-            toimage(image, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
+            toimage(sr, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
 
     def _load_latest_checkpoint_or_initialize(self, saver, attempt_load=True):
         if cfg.WEIGHTS:
@@ -411,6 +456,8 @@ def main():
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=cfg.MEM_FRAC)
     sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
     file_list = glob.glob(cfg.IMAGES)
+    if cfg.MAX_FILES:
+        file_list = file_list[:cfg.MAX_FILES]
     loader = Loader(file_list)
     model = SuperRes(sess, loader)
 
