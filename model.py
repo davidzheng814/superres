@@ -228,6 +228,10 @@ class SuperRes(object):
             toimage(image, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
 
     def _load_latest_checkpoint_or_initialize(self, saver, attempt_load=True):
+        if cfg.WEIGHTS:
+            logging.info("Loading params from " + cfg.WEIGHTS)
+            saver.restore(self.sess, cfg.WEIGHTS)
+            return cfg.WEIGHTS
         ckpt_files = list(filter(lambda x: "meta" not in x, glob.glob(cfg.CHECKPOINT + "*")))
         if attempt_load and len(ckpt_files) > 0:
             ckpt_files.sort(key=lambda s: [int(t) if t.isdigit() else t.lower() for t in re.split('(\d+)', s)])
@@ -411,8 +415,8 @@ def main():
     model = SuperRes(sess, loader)
 
     TEST_IMGS = [
-        "/home/images/imagenet/n00007846_80134.JPEG",
-        "/home/images/imagenet/n00015388_65010.JPEG",
+        "/home/images/imagenet/n09287968_7641.JPEG",
+        "/home/images/imagenet/n00523513_12670.JPEG",
     ]
     OUT_FILE = "images/test_{i}"
     if cfg.PREDICT_ONLY:
@@ -435,6 +439,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-ckpt', action="store_true")
     parser.add_argument('--pretrain-only', action="store_true")
     parser.add_argument('--predict-only', action="store_true")
+    parser.add_argument('--weights', type=str)
     parser.add_argument('--max-files', type=int)
 
     args = parser.parse_args()
@@ -454,5 +459,8 @@ if __name__ == '__main__':
         cfg.PREDICT_ONLY = True
     if args.mem:
         cfg.MEM_FRAC = args.mem
+    if args.weights:
+        cfg.USE_CHECKPOINT = True
+        cfg.WEIGHTS = args.weights
 
     main()
