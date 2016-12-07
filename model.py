@@ -78,9 +78,9 @@ class GAN(object):
                 self.DG = self.discriminator(self.G)
 
             # MSE Loss and Adversarial Loss for G
-            self.mse_loss = tf.reduce_mean(
-                tf.squared_difference(self.d_images, self.G))
-            # self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
+            # self.mse_loss = tf.reduce_mean(
+            #     tf.squared_difference(self.d_images, self.G))
+            self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
             self.g_ad_loss = (tf.reduce_mean(
                     tf.nn.sigmoid_cross_entropy_with_logits(
                     self.DG, tf.ones_like(self.DG))))
@@ -453,8 +453,9 @@ class SuperRes(object):
             coord.join(threads)
 
 def main():
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=cfg.MEM_FRAC)
-    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
     file_list = glob.glob(cfg.IMAGES)
     if cfg.MAX_FILES:
         file_list = file_list[:cfg.MAX_FILES]
@@ -464,6 +465,7 @@ def main():
     TEST_IMGS = [
         "/home/images/imagenet/n09287968_7641.JPEG",
         "/home/images/imagenet/n00523513_12670.JPEG",
+        "/home/images/imagenet/n00007846_80134.JPEG"
     ]
     OUT_FILE = "images/test_{i}"
     if cfg.PREDICT_ONLY:
