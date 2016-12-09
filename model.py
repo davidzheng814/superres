@@ -63,7 +63,7 @@ class GAN(object):
         self.is_training = tf.placeholder(tf.bool, shape=[])
         self.image_tensor = None
 
-    def build_model(self, input_image=None):
+    def build_model(self, use_fft=False, input_image=None):
         if input_image is not None:
             with tf.variable_scope("G", reuse=True) as scope:
                 self.image_tensor = tf.placeholder(tf.float32, input_image.shape)
@@ -74,9 +74,14 @@ class GAN(object):
                 self.G = self.generator(reuse=False)
 
             with tf.variable_scope("D") as scope:
-                self.D = self.discriminator(self.d_images, reuse=False)
-                scope.reuse_variables()
-                self.DG = self.discriminator(self.G, reuse=True)
+                if use_fft:
+                    self.D = self.fft_discriminator(self.d_images)
+                    scope.reuse_variables()
+                    self.DG = self.fft_discriminator(self.G)
+                else:
+                    self.D = self.discriminator(self.d_images, reuse=False)
+                    scope.reuse_variables()
+                    self.DG = self.discriminator(self.G, reuse=True)
 
             # MSE Loss and Adversarial Loss for G
             self.mse_loss = tf.reduce_mean(
@@ -134,6 +139,16 @@ class GAN(object):
         with tf.variable_scope("conv2"):
             h = conv_block(h, output_channels=3, reuse=reuse)
 
+        return h
+
+    def fft_discriminator(self, inp):
+        shuffled_inp = tf.transpose(inp, perm=[0, 3, 1, 2])
+        inp_fft = tf.fft2d(tf.cast(shuffled_inp, tf.complex64))
+        amp = tf.complex_abs(inp_fft)
+        with tf.variable_scope("dense1"):
+            h = dense_block(amp, leaky_relu=True, output_size=1024)
+        with tf.variable_scope("dense2"):
+            h = dense_block(h, output_size=1)
         return h
 
     def discriminator(self, inp, reuse=False):
@@ -235,7 +250,7 @@ class SuperRes(object):
         self.train_batch, self.val_batch, self.test_batch = loader.batch()
 
         self.GAN = GAN()
-        self.GAN.build_model()
+        self.GAN.build_model(use_fft=False)
 
         self.g_mse_optim = (tf.train.AdamOptimizer(cfg.LEARNING_RATE, beta1=cfg.BETA_1)
             .minimize(self.GAN.mse_loss, var_list=self.GAN.g_vars))
