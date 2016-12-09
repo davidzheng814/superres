@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.training import moving_averages
+from tensorflow.contrib.layers.python.layers.layers import batch_norm
 
 import config as cfg
 
@@ -13,7 +14,7 @@ def relu_block(x, alpha=0., max_value=None):
     x -= tf.constant(alpha, dtype=tf.float32) * negative_part
     return x
 
-def res_block(inp, is_training_cond):
+def res_block(inp, is_training_cond, reuse=False):
     """ResNet B Block.
     TODO: decide whether bias is worth it
     """
@@ -21,10 +22,11 @@ def res_block(inp, is_training_cond):
     assert inp_shape[-1] == 64 # Must have 64 channels to start.
 
     with tf.variable_scope("resconv1"):
-        h = conv_block(inp, relu=True, bn=True, is_training_cond=is_training_cond)
+        h = conv_block(inp, relu=True, bn=True, is_training_cond=is_training_cond,
+                reuse=reuse)
 
     with tf.variable_scope("resconv2"):
-        h = conv_block(h, bn=True, is_training_cond=is_training_cond)
+        h = conv_block(h, bn=True, is_training_cond=is_training_cond, reuse=reuse)
 
     return inp + h
 
@@ -49,7 +51,8 @@ def deconv_block(inp, relu=True, output_channels=64):
     return h
 
 def conv_block(inp, relu=False, leaky_relu=False, bn=False,
-               output_channels=64, stride=1, is_training_cond=None):
+               output_channels=64, stride=1, is_training_cond=None,
+               reuse=False):
     inp_shape = inp.get_shape()
     kernel_shape = (3, 3, inp_shape[-1], output_channels)
     strides = [1, stride, stride, 1]
@@ -59,28 +62,11 @@ def conv_block(inp, relu=False, leaky_relu=False, bn=False,
     h = tf.nn.conv2d(inp, weights, strides, padding='SAME')
 
     if leaky_relu:
-        h = relu_block(h, alpha=0.1)
+        h = relu_block(h, alpha=0.01)
 
     if bn:
-        params_shape = h.get_shape()[-1:]
-        beta = tf.get_variable('beta', params_shape, 
-            initializer=tf.zeros_initializer)
-        gamma = tf.get_variable('gamma', params_shape, 
-            initializer=tf.ones_initializer)
-        moving_mean = tf.get_variable('moving_mean', params_shape, 
-            initializer=tf.zeros_initializer, trainable=False)
-        moving_variance = tf.get_variable('moving_variance', params_shape, 
-            initializer=tf.ones_initializer, trainable=False)
-        mean, variance = tf.nn.moments(h, [0, 1, 2])
-        update_moving_mean = moving_averages.assign_moving_average(moving_mean,
-            mean, cfg.BN_DECAY)
-        update_moving_variance = moving_averages.assign_moving_average(moving_variance,
-            variance, cfg.BN_DECAY)
-        tf.add_to_collection(cfg.UPDATE_OPS_COLLECTION, update_moving_mean)
-        tf.add_to_collection(cfg.UPDATE_OPS_COLLECTION, update_moving_variance)
-        mean, variance = tf.cond(is_training_cond, lambda: (mean, variance),
-            lambda: (moving_mean, moving_variance))
-        h = tf.nn.batch_normalization(h, mean, variance, beta, gamma, cfg.BN_EPSILON)
+        h = batch_norm(h, reuse=reuse, is_training=is_training_cond,
+            scope=tf.get_variable_scope(), scale=True)
 
     if relu:
         h = tf.nn.relu(h)
@@ -101,7 +87,7 @@ def dense_block(inp, leaky_relu=False, sigmoid=False,
     h = tf.matmul(h, w) + b
 
     if leaky_relu:
-        h = relu_block(h, alpha=0.1)
+        h = relu_block(h, alpha=0.01)
 
     if sigmoid:
         h = tf.nn.sigmoid(h)

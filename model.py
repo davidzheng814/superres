@@ -1,4 +1,5 @@
 import tensorflow as tf
+from tensorflow.python.framework import ops
 import numpy as np
 import glob
 import argparse
@@ -67,20 +68,20 @@ class GAN(object):
             with tf.variable_scope("G", reuse=True) as scope:
                 self.image_tensor = tf.placeholder(tf.float32, input_image.shape)
                 scope.reuse_variables()
-                self.G = self.generator()
+                self.G = self.generator(reuse=True)
         else:
             with tf.variable_scope("G"):
-                self.G = self.generator()
+                self.G = self.generator(reuse=False)
 
             with tf.variable_scope("D") as scope:
-                self.D = self.discriminator(self.d_images)
+                self.D = self.discriminator(self.d_images, reuse=False)
                 scope.reuse_variables()
-                self.DG = self.discriminator(self.G)
+                self.DG = self.discriminator(self.G, reuse=True)
 
             # MSE Loss and Adversarial Loss for G
-            # self.mse_loss = tf.reduce_mean(
-            #     tf.squared_difference(self.d_images, self.G))
-            self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
+            self.mse_loss = tf.reduce_mean(
+                tf.squared_difference(self.d_images, self.G))
+            # self.mse_loss = tf.reduce_mean(tf.abs(self.d_images - self.G))
             self.g_ad_loss = (tf.reduce_mean(
                     tf.nn.sigmoid_cross_entropy_with_logits(
                     self.DG, tf.ones_like(self.DG))))
@@ -107,7 +108,7 @@ class GAN(object):
             # TODO Missing VGG loss and regularization loss.
             # Also missing weighting on losses.
 
-    def generator(self):
+    def generator(self, reuse=False):
         """Returns model generator, which is a DeConvNet.
         Assumed properties:
             gen_input - a scalar
@@ -117,28 +118,25 @@ class GAN(object):
         """
         with tf.variable_scope("conv1"):
             if self.image_tensor != None:
-                h = conv_block(self.image_tensor, relu=True)
+                h = conv_block(self.image_tensor, relu=True, reuse=reuse)
             else:
                 # noise = tf.random_normal(self.g_images.get_shape(), stddev=.03 * 255)
                 h = self.g_images
-                h = conv_block(self.g_images, relu=True)
+                h = conv_block(self.g_images, relu=True, reuse=reuse)
 
         for i in range(1, 16):
             with tf.variable_scope("res" + str(i)):
-                h = res_block(h, self.is_training)
+                h = res_block(h, self.is_training, reuse=reuse)
 
         with tf.variable_scope("deconv1"):
             h = deconv_block(h)
 
-        with tf.variable_scope("deconv2"):
-            h = deconv_block(h)
-
         with tf.variable_scope("conv2"):
-            h = conv_block(h, output_channels=3)
+            h = conv_block(h, output_channels=3, reuse=reuse)
 
         return h
 
-    def discriminator(self, inp):
+    def discriminator(self, inp, reuse=False):
         """Returns model discriminator.
         Assumed properties:
             disc_input - an image tensor
@@ -146,35 +144,41 @@ class GAN(object):
             ...
         """
         with tf.variable_scope("conv1"):
-            h = conv_block(inp, leaky_relu=True)
+            h = conv_block(inp, leaky_relu=True, reuse=reuse)
 
         with tf.variable_scope("conv2"):
             h = conv_block(h, leaky_relu=True, bn=True, 
-                is_training_cond=self.is_training, stride=2)
+                is_training_cond=self.is_training, stride=2, reuse=reuse)
 
         with tf.variable_scope("conv3"):
             h = conv_block(h, leaky_relu=True, bn=True, 
-                is_training_cond=self.is_training, output_channels=128)
+                is_training_cond=self.is_training, output_channels=128,
+                reuse=reuse)
 
         with tf.variable_scope("conv4"):
             h = conv_block(h, leaky_relu=True, bn=True,
-                is_training_cond=self.is_training, output_channels=128, stride=2)
+                is_training_cond=self.is_training, output_channels=128, stride=2,
+                reuse=reuse)
 
         with tf.variable_scope("conv5"):
             h = conv_block(h, leaky_relu=True, bn=True,
-                is_training_cond=self.is_training, output_channels=256, stride=1)
+                is_training_cond=self.is_training, output_channels=256, stride=1,
+                reuse=reuse)
 
         with tf.variable_scope("conv6"):
             h = conv_block(h, leaky_relu=True, bn=True,
-                is_training_cond=self.is_training, output_channels=256, stride=2)
+                is_training_cond=self.is_training, output_channels=256, stride=2,
+                reuse=reuse)
 
         with tf.variable_scope("conv7"):
             h = conv_block(h, leaky_relu=True, bn=True,
-                is_training_cond=self.is_training, output_channels=512, stride=1)
+                is_training_cond=self.is_training, output_channels=512, stride=1,
+                reuse=reuse)
 
         with tf.variable_scope("conv8"):
             h = conv_block(h, leaky_relu=True, bn=True,
-                is_training_cond=self.is_training, output_channels=512, stride=2)
+                is_training_cond=self.is_training, output_channels=512, stride=2,
+                reuse=reuse)
 
         with tf.variable_scope("dense1"):
             h = dense_block(h, leaky_relu=True, output_size=1024)
@@ -240,7 +244,7 @@ class SuperRes(object):
         self.g_optim = (tf.train.AdamOptimizer(cfg.LEARNING_RATE, beta1=cfg.BETA_1)
             .minimize(self.GAN.g_loss, var_list=self.GAN.g_vars))
 
-        batchnorm_updates = tf.get_collection(cfg.UPDATE_OPS_COLLECTION)
+        batchnorm_updates = tf.get_collection(ops.GraphKeys.UPDATE_OPS)
         self.pretrain = tf.group(self.g_mse_optim, *batchnorm_updates)
         self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
 
