@@ -1,4 +1,5 @@
-IMAGES = "/home/images/all/*"
+IMAGES = "/home/images/tmp/*"
+OUTPUT_DIR = "/home/images/2x/"
 LOGS_DIR = "logs/"
 CHECKPOINT = "checkpoint/weights"
 USE_CHECKPOINT = True
@@ -25,6 +26,9 @@ BETA_1 = 0.9
 RANDOM_SEED = 1337 
 
 MAX_FILES = None
+SAVE_TRUTH = False
 PREDICT_ONLY = False
+PREDICT_2X = False
+PREDICT_4X = False
 WEIGHTS = None
 MEM_FRAC = 0.9
