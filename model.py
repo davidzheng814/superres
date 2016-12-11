@@ -257,7 +257,7 @@ class SuperRes(object):
         self.pretrain = tf.group(self.g_mse_optim, *batchnorm_updates)
         self.train = tf.group(self.d_optim, self.g_optim, *batchnorm_updates)
 
-    def predict(self, input_name, output_name, init_vars):
+    def predict(self, input_name, output_name, init_vars=False):
         if init_vars == True:
             self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         with Image.open(input_name) as image:
@@ -285,21 +285,19 @@ class SuperRes(object):
             toimage(hr, cmin=0., cmax=255.).save(output_name + '_hr.JPEG')
             toimage(sr, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
 
-    def predict_all_2x(self, file_list, output_directory, init_vars):
+    def predict_all_2x(self, file_list, output_directory, scale, init_vars=False):
         if init_vars == True:
             self._load_latest_checkpoint_or_initialize(tf.train.Saver())
         batch_size = 50
         test_GAN = GAN()
-        test_GAN.build_model(input_images=np.zeros((batch_size, crop_height/4, crop_width/4, 3)))
+        test_GAN.build_model(input_images=np.zeros((batch_size, int(cfg.CROP_HEIGHT/scale), int(cfg.CROP_WIDTH/scale), 3)))
         for i, image_file in enumerate(file_list):
             if not i % batch_size:
                 images = []
             with Image.open(image_file) as image:
                 lr = np.asarray(image, dtype=np.uint8)
-                x, y = hr.shape[0:2]
-                if x >= crop_height and y >= crop_width:
-                    image_name = image_file.split("/")[-1]
-                    images.append(lr)
+                image_name = image_file.split("/")[-1]
+                images.append(lr)
             if not (i + 1) % batch_size:
                 images = np.array(images)
                 sr = self.sess.run(
@@ -309,9 +307,9 @@ class SuperRes(object):
                         test_GAN.is_training: False
                 })
                 sr = sr[0]
-                for i, image in enumerate(sr):
+                for j, image in enumerate(sr):
                     image = np.maximum(np.minimum(image, 255.0), 0.0)
-                    toimage(image, cmin=0., cmax=255.).save(output_directory + file_list[i].split("/")[-1])
+                    toimage(image, cmin=0., cmax=255.).save(output_directory + file_list[j].split("/")[-1])
 
     def _load_latest_checkpoint_or_initialize(self, saver, attempt_load=True):
         if cfg.WEIGHTS:
@@ -494,15 +492,13 @@ class SuperRes(object):
             coord.join(threads)
 
 def save_truth_images(file_list, output_directory):
-    crop_height = 128
-    crop_width = 128
     for image_file in file_list:
         with Image.open(image_file) as image:
             hr = np.asarray(image, dtype=np.uint8)
             x, y = hr.shape[0:2]
-            if x >= crop_height and y >= crop_width:
+            if x >= cfg.CROP_HEIGHT and y >= cfg.CROP_WIDTH:
                 image_name = image_file.split("/")[-1]
-                hr = hr[0:crop_height, 0:crop_width]
+                hr = hr[0:cfg.CROP_HEIGHT, 0:cfg.CROP_WIDTH]
                 hr_image = Image.fromarray(hr)
                 hr_image.save(output_directory + "/truth4x/" + image_name)
                     
@@ -546,9 +542,9 @@ def main():
     if cfg.SAVE_TRUTH:
         save_truth_images(file_list, cfg.OUTPUT_DIR)
     elif cfg.PREDICT_4X:
-        model.predict_all_2x(truth_list, cfg.OUTPUT_DIR + "/sr2x", init_vars=True)
+        model.predict_all_2x(sr2x_list, cfg.OUTPUT_DIR + "/sr4x/", 2, init_vars=True)
     elif cfg.PREDICT_2X:
-        model.predict_all_2x(sr2x_list, cfg.OUTPUT_DIR + "/sr4x", init_vars=True)
+        model.predict_all_2x(truth_list, cfg.OUTPUT_DIR + "/sr2x/", 4, init_vars=True)
     elif cfg.PREDICT_ONLY:
         for i, img in enumerate(TEST_IMGS):
             out_file = OUT_FILE.replace("{i}", str(i))
@@ -591,7 +587,7 @@ if __name__ == '__main__':
     if args.pretrain_only:
         cfg.PRETRAIN_ONLY = True
     if args.predict_only:
-        cfg.PREDICT_ONLY = TrueA
+        cfg.PREDICT_ONLY = True
     if args.predict_4x:
         cfg.PREDICT_4X = True
     if args.predict_2x:
