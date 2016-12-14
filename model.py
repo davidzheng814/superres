@@ -130,18 +130,22 @@ class GAN(object):
         with tf.variable_scope("deconv1"):
             h = deconv_block(h)
 
+        with tf.variable_scope("deconv2"):
+            h = deconv_block(h)
+
         with tf.variable_scope("conv2"):
             h = conv_block(h, output_channels=3, reuse=reuse)
 
         return h
 
     def fft_discriminator(self, inp):
-        shuffled_inp = tf.transpose(inp, perm=[0, 3, 1, 2])
+        scaled_inp = inp / 256
+        shuffled_inp = tf.transpose(scaled_inp, perm=[0, 3, 1, 2])
         inp_fft = tf.fft2d(tf.cast(shuffled_inp, tf.complex64))
         amp = tf.complex_abs(inp_fft)
-        with tf.variable_scope("dense1"):
+        with tf.variable_scope("fft_dense1"):
             h = dense_block(amp, leaky_relu=True, output_size=1024)
-        with tf.variable_scope("dense2"):
+        with tf.variable_scope("fft_dense2"):
             h = dense_block(h, output_size=1)
         return h
 
@@ -225,14 +229,14 @@ def ssim(img1, img2, cs_map=False):
     L = 255 #bitdepth of image
     C1 = (K1*L)**2
     C2 = (K2*L)**2
-    mu1 = signal.fftconvolve(window, img1, mode='valid')
-    mu2 = signal.fftconvolve(window, img2, mode='valid')
+    mu1 = signal.fftconvolve(img1, window, mode='valid')
+    mu2 = signal.fftconvolve(img2, window, mode='valid')
     mu1_sq = mu1*mu1
     mu2_sq = mu2*mu2
     mu1_mu2 = mu1*mu2
-    sigma1_sq = signal.fftconvolve(window, img1*img1, mode='valid') - mu1_sq
-    sigma2_sq = signal.fftconvolve(window, img2*img2, mode='valid') - mu2_sq
-    sigma12 = signal.fftconvolve(window, img1*img2, mode='valid') - mu1_mu2
+    sigma1_sq = signal.fftconvolve(img1*img1, window, mode='valid') - mu1_sq
+    sigma2_sq = signal.fftconvolve(img2*img2, window, mode='valid') - mu2_sq
+    sigma12 = signal.fftconvolve(img1*img2, window, mode='valid') - mu1_mu2
     return (((2*mu1_mu2 + C1)*(2*sigma12 + C2))/((mu1_sq + mu2_sq + C1)*
             (sigma1_sq + sigma2_sq + C2))).mean()
 
@@ -260,30 +264,30 @@ class SuperRes(object):
     def predict(self, input_name, output_name, init_vars=False):
         if init_vars == True:
             self._load_latest_checkpoint_or_initialize(tf.train.Saver())
-        with Image.open(input_name) as image:
-            hr = np.asarray(image, dtype=np.uint8)
-            w = hr.shape[0] - hr.shape[0] % 4
-            h = hr.shape[1] - hr.shape[1] % 4
-            hr = hr[:w,:h]
-            lr = imresize(hr, 100 // cfg.r, interp='bicubic')
-            bicubic = imresize(lr, cfg.r * 100, interp='bicubic')
-            image = np.reshape(lr, (1,) + lr.shape)
-            test_GAN = GAN()
-            test_GAN.build_model(input_images=image)
-            sr = self.sess.run(
-                [test_GAN.G],
-                feed_dict={
-                    test_GAN.test_images: image,
-                    test_GAN.is_training: False
-            })
-            sr = np.maximum(np.minimum(sr[0][0], 255.0), 0.0)
+        image = Image.open(input_name)
+        hr = np.asarray(image, dtype=np.uint8)
+        w = hr.shape[0] - hr.shape[0] % 4
+        h = hr.shape[1] - hr.shape[1] % 4
+        hr = hr[:w,:h]
+        lr = imresize(hr, 100 // cfg.r, interp='bicubic')
+        bicubic = imresize(lr, cfg.r * 100, interp='bicubic')
+        image = np.reshape(lr, (1,) + lr.shape)
+        test_GAN = GAN()
+        test_GAN.build_model(input_images=image)
+        sr = self.sess.run(
+            [test_GAN.G],
+            feed_dict={
+                test_GAN.test_images: image,
+                test_GAN.is_training: False
+        })
+        sr = np.maximum(np.minimum(sr[0][0], 255.0), 0.0)
 
-            logging.info("SSIM - Bicubic %f, SR %f", ssim(bicubic, hr), ssim(sr, hr))
+        logging.info("SSIM - Bicubic %f, SR %f", ssim(bicubic, hr), ssim(sr, hr))
 
-            toimage(lr, cmin=0., cmax=255.).save(output_name + '_lr.JPEG')
-            toimage(bicubic, cmin=0., cmax=255.).save(output_name + '_bc.JPEG')
-            toimage(hr, cmin=0., cmax=255.).save(output_name + '_hr.JPEG')
-            toimage(sr, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
+        toimage(lr, cmin=0., cmax=255.).save(output_name + '_lr.JPEG')
+        toimage(bicubic, cmin=0., cmax=255.).save(output_name + '_bc.JPEG')
+        toimage(hr, cmin=0., cmax=255.).save(output_name + '_hr.JPEG')
+        toimage(sr, cmin=0., cmax=255.).save(output_name + '_sr.JPEG')
 
     def predict_all_2x(self, file_list, output_directory, scale, init_vars=False):
         if init_vars == True:
@@ -428,7 +432,7 @@ class SuperRes(object):
                     ind += 1
                 logging.info("Epoch MSE Loss: %f" % (loss_sum / cfg.NUM_TRAIN_BATCHES,))
 
-                if epoch % 10 == 0:
+                if epoch % 4 == 0:
                     logging.info("Saving Checkpoint")
                     saver.save(sess, cfg.CHECKPOINT + str(epoch))
             done_batch = 0
@@ -447,9 +451,9 @@ class SuperRes(object):
                     self.train_writer.add_summary(res[0], ind)
                     losses = [x + y for x, y in zip(losses, res[1:])]
                     ind += 1
-
-                logging.info("Epoch Training Losses")
-                self._print_losses(losses, cfg.NUM_TRAIN_BATCHES)
+                    if ind % 100 == 0:
+                        self._print_losses(losses, 100)
+                        losses = [0 for _ in range(6)]
 
                 # Validation
                 losses = [0 for _ in range(6)]
@@ -462,9 +466,8 @@ class SuperRes(object):
                 logging.info("Epoch Validation Losses")
                 self._print_losses(losses, cfg.NUM_VAL_BATCHES)
 
-                if epoch % 5 == 0:
-                    logging.info("Saving Checkpoint (Adversarial)")
-                    saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
+		logging.info("Saving Checkpoint (Adversarial)")
+                saver.save(sess, cfg.CHECKPOINT + "_adversarial" + str(epoch))
 
         coord.request_stop()
         coord.join(threads)
